@@ -16,16 +16,19 @@ for item in ../"$sarasa_dir"/*; do
   fi
 done
 
-echo "generating ttc from ttf"
 cd "$root_dir"
+echo "list generated ttf"
+ls $sarasa_nerd_dir/*.ttf
+
+echo "generating ttc from ttf"
 python otf2otc.py -o $sarasa_nerd_dir/SarasaTermSCNerd.ttc $sarasa_nerd_dir/SarasaTermSCNerd-*.ttf
 cd "$sarasa_nerd_dir"
 echo "creating tarball of ttf files"
 COPYFILE_DISABLE=1 tar -czvf SarasaTermSCNerd.ttf.tar.gz SarasaTermSCNerd-*.ttf
 echo "creating tarball of ttc files"
-COPYFILE_DISABLE=1 tar -czvf SarasaTermSCNerd.ttc.tar.gz SarasaTermSCNerd-*.ttc
+COPYFILE_DISABLE=1 tar -czvf SarasaTermSCNerd.ttc.tar.gz SarasaTermSCNerd.ttc
 echo "creating 7zip of ttc files"
-7zr a -mx9 SarasaTermSCNerd.ttc.7z SarasaTermSCNerd-*.ttc
+7zr a -mx9 SarasaTermSCNerd.ttc.7z SarasaTermSCNerd.ttc
 echo "creating 7zip of ttf files"
 7zr a -mx9 SarasaTermSCNerd.ttf.7z SarasaTermSCNerd-*.ttf
 cd "$root_dir"

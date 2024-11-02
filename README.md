@@ -57,19 +57,32 @@ fonts`合并入`Sarasa Term SC`, 再经过一些后处理，而最后形成的�
 
 ## 如何生成字体
 
-1. 进入 `nerd font` 源码目录，以下所有操作都在此目录下进行。
-2. 将本项目 `scripts` 目录下的文件（不含`script`目录自身）拷贝过去。
-3. 安装`fontpatcher`
-   ```
-   wget https://github.com/ryanoasis/nerd-fonts/releases/latest/download/FontPatcher.zip
-   unzip FontPatcher.zip && rm -rvf FontPatcher.zip
-   ```
-4. 安装 `python` 环境
-   ```
-   brew install fontforge
-   rm Pipfile*
-   pipenv --site-packages --python=/Applications/FontForge.app/Contents/Frameworks/Python.framework/Versions/Current/bin/python3
-   ```
-5. 建立 `sarasa` 目录，并将原始`Sarasa Term SC`字体文件放入该目录中。
-6. 运行脚本 `./build`，在 `sarasa-nerd`目录下将生成`.ttf`字体文件。同时，所有的
-   `.ttf`也被打包成一个`.ttc`字体合集文件。
+```sh
+# Install deps
+sudo apt update && sudo apt install -y fontforge python3-fontforge python3-fonttools p7zip jq
+
+# Download Sarasa Gothic
+wget -q $(curl 'https://api.github.com/repos/be5invis/Sarasa-Gothic/releases' | jq -r '.[0].assets | map(.browser_download_url) | map(select(test("SarasaTermSC-TTF-[0-9.]+\\.7z"))) | .[0]')
+7zr x Sarasa*.7z
+mkdir sarasa
+mv Sarasa*.ttf sarasa
+
+# Download Font Patcher
+wget -q https://github.com/ryanoasis/nerd-fonts/raw/refs/heads/master/FontPatcher.zip
+unzip FontPatcher.zip
+
+# Copy Scripts
+cp scripts/font-patcher font-patcher && cp scripts/otf2otc.py otf2otc.py
+
+# name: Build Nerd
+bash -xeu scripts/build
+```
+
+在 macOS 中，注意需要使用 fontforge 自带的 python
+
+```sh
+brew install fontforge
+rm Pipfile*
+pipenv --site-packages --python=/Applications/FontForge.app/Contents/Frameworks/Python.framework/Versions/Current/bin/python3
+
+```
