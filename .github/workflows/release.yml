@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        run: sudo apt update && sudo apt install -y fontforge python3-fontforge p7zip jq
+
+      - name: Download Sarasa Gothic
+        run: |
+          wget -q $(curl 'https://api.github.com/repos/be5invis/Sarasa-Gothic/releases' | jq -r '.[0].assets | map(.browser_download_url) | map(select(test("SarasaTermSC-TTF-[0-9.]+\\.7z"))) | .[0]')
+          7zr x Sarasa-*.7z
+          mkdir sarasa
+          mv sarasa-term-sc-*.ttf sarasa
+
+      - name: Download Font Patcher
+        run: |
+          wget -q https://github.com/ryanoasis/nerd-fonts/raw/refs/heads/master/FontPatcher.zip
+          unzip FontPatcher.zip
+
+      - name: Copy Scripts
+        run: cp scripts/font-patcher font-patcher && cp scripts/otf2otc.py otf2otc.py
+
+      - name: Build Nerd Font
+        run: bash -xeu scripts/build
+
+      - name: Upload ttc.7z
+        uses: actions/upload-artifact@v4
+        with:
+          name: sarasa-term-sc-nerd.ttc.7z
+          path: sarasa-nerd/sarasa-term-sc-nerd.ttc.7z
+
+      - name: Upload ttf.7z
+        uses: actions/upload-artifact@v4
+        with:
+          name: sarasa-term-sc-nerd.ttf.7z
+          path: sarasa-nerd/sarasa-term-sc-nerd.ttf.7z
+
+      - name: Upload ttc.tar.gz
+        uses: actions/upload-artifact@v4
+        with:
+          name: sarasa-term-sc-nerd.ttc.tar.gz
+          path: sarasa-nerd/sarasa-term-sc-nerd.ttc.tar.gz
+
+      - name: Upload ttf.tar.gz
+        uses: actions/upload-artifact@v4
+        with:
+          name: sarasa-term-sc-nerd.ttf.tar.gz
+          path: sarasa-nerd/sarasa-term-sc-nerd.ttf.tar.gz

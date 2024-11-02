@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/bash -xeu
 
 root_dir="$(pwd)"
 sarasa_dir="sarasa"
@@ -11,7 +11,7 @@ for item in ../"$sarasa_dir"/*; do
     extension="${item##*.}"
     if [ "$extension" == "ttf" ]; then
       echo "processing " "$item"
-      ../font-patcher -l -c --careful "$item"
+      ../font-patcher -q -l -c --careful "$item"
     fi
   fi
 done
@@ -25,7 +25,7 @@ COPYFILE_DISABLE=1 tar -czvf sarasa-term-sc-nerd.ttf.tar.gz sarasa-term-sc-*.ttf
 echo "creating tarball of ttc files"
 COPYFILE_DISABLE=1 tar -czvf sarasa-term-sc-nerd.ttc.tar.gz sarasa-term-sc-*.ttc
 echo "creating 7zip of ttc files"
-7zz a -mx9 sarasa-term-sc-nerd.ttc.7z sarasa-term-sc-*.ttc
+7zr a -mx9 sarasa-term-sc-nerd.ttc.7z sarasa-term-sc-*.ttc
 echo "creating 7zip of ttf files"
-7zz a -mx9 sarasa-term-sc-nerd.ttf.7z sarasa-term-sc-*.ttf
+7zr a -mx9 sarasa-term-sc-nerd.ttf.7z sarasa-term-sc-*.ttf
 cd "$root_dir"
