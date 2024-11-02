@@ -18,9 +18,9 @@ jobs:
       - name: Download Sarasa Gothic
         run: |
           wget -q $(curl 'https://api.github.com/repos/be5invis/Sarasa-Gothic/releases' | jq -r '.[0].assets | map(.browser_download_url) | map(select(test("SarasaTermSC-TTF-[0-9.]+\\.7z"))) | .[0]')
-          7zr x Sarasa-*.7z
+          7zr x Sarasa*.7z
           mkdir sarasa
-          mv sarasa-term-sc-*.ttf sarasa
+          mv Sarasa*.ttf sarasa
 
       - name: Download Font Patcher
         run: |
@@ -33,26 +33,29 @@ jobs:
       - name: Build Nerd Font
         run: bash -xeu scripts/build
 
+      - name: Display structure of downloaded files
+        run: ls -R
+
       - name: Upload ttc.7z
         uses: actions/upload-artifact@v4
         with:
-          name: sarasa-term-sc-nerd.ttc.7z
-          path: sarasa-nerd/sarasa-term-sc-nerd.ttc.7z
+          name: SarasaTermSCNerd.ttc.7z
+          path: sarasa-nerd/SarasaTermSCNerd.ttc.7z
 
       - name: Upload ttf.7z
         uses: actions/upload-artifact@v4
         with:
-          name: sarasa-term-sc-nerd.ttf.7z
-          path: sarasa-nerd/sarasa-term-sc-nerd.ttf.7z
+          name: SarasaTermSCNerd.ttf.7z
+          path: sarasa-nerd/SarasaTermSCNerd.ttf.7z
 
       - name: Upload ttc.tar.gz
         uses: actions/upload-artifact@v4
         with:
-          name: sarasa-term-sc-nerd.ttc.tar.gz
-          path: sarasa-nerd/sarasa-term-sc-nerd.ttc.tar.gz
+          name: SarasaTermSCNerd.ttc.tar.gz
+          path: sarasa-nerd/SarasaTermSCNerd.ttc.tar.gz
 
       - name: Upload ttf.tar.gz
         uses: actions/upload-artifact@v4
         with:
-          name: sarasa-term-sc-nerd.ttf.tar.gz
-          path: sarasa-nerd/sarasa-term-sc-nerd.ttf.tar.gz
+          name: SarasaTermSCNerd.ttf.tar.gz
+          path: sarasa-nerd/SarasaTermSCNerd.ttf.tar.gz
