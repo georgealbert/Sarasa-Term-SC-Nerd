@@ -2087,6 +2087,8 @@ def setup_arguments():
         args.powerline = True
         args.powerlineextra = True
         args.material = True
+        # FOR SARASA
+        args.material = False
         args.weather = True
 
     if not args.complete:
