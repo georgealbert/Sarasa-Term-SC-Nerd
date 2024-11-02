@@ -1,14 +1,15 @@
 #!/usr/bin/env python
 # coding=utf8
-# Nerd Fonts Version: 2.3.3
+# Nerd Fonts Version: 3.2.1
 # Script version is further down
 
 from __future__ import absolute_import, print_function, unicode_literals
 
 # Change the script version when you edit this script:
-script_version = "3.6.1"
+script_version = "4.14.5"
 
-version = "2.3.3"
+version = "3.2.1"
+projectName = "Nerd Fonts"
 subFamily = ""
 projectName = "Nerds"
 projectNameAbbreviation = "NF"
@@ -23,6 +24,7 @@ import errno
 import subprocess
 import json
 from enum import Enum
+import logging
 try:
     import configparser
 except ImportError:
@@ -136,6 +138,7 @@ class TableHEADWriter:
             positions = {'checksumAdjustment': 2+2+4,
                          'flags': 2+2+4+4+4,
                          'lowestRecPPEM': 2+2+4+4+4+2+2+8+8+2+2+2+2+2,
+                         'avgWidth': 2,
                 }
             where = self.tab_offset + positions[where]
         self.f.seek(where)
@@ -239,21 +242,21 @@ def force_panose_monospaced(font):
     panose = list(font.os2_panose)
     if panose[0] == 0: # 0 (1st value) = family kind; 0 = any (default)
         panose[0] = 2 # make kind latin text and display
-        print("  Setting Panose 'Family Kind' to 'Latin Text and Display' (was 'Any')")
+        logger.info("Setting Panose 'Family Kind' to 'Latin Text and Display' (was 'Any')")
         font.os2_panose = tuple(panose)
     if panose[0] == 2 and panose[3] != 9:
-        print("  Setting Panose 'Proportion' to 'Monospaced' (was '{}')".format(panose_proportion_to_text(panose[3])))
+        logger.info("Setting Panose 'Proportion' to 'Monospaced' (was '%s')", panose_proportion_to_text(panose[3]))
         panose[3] = 9 # 3 (4th value) = proportion; 9 = monospaced
         font.os2_panose = tuple(panose)
 
 def get_advance_width(font, extended, minimum):
     """ Get the maximum/minimum advance width in the extended(?) range """
     width = 0
-    if extended:
-        end = 0x17f
+    if not extended:
+        r = range(0x021, 0x07e)
     else:
-        end = 0x07e
-    for glyph in range(0x21, end):
+        r = range(0x07f, 0x17f)
+    for glyph in r:
         if not glyph in font:
             continue
         if glyph in range(0x7F, 0xBF):
@@ -269,8 +272,8 @@ def get_advance_width(font, extended, minimum):
 
 def report_advance_widths(font):
     return "Advance widths (base/extended): {} - {} / {} - {}".format(
-        get_advance_width(font, True, True), get_advance_width(font, False, True),
-        get_advance_width(font, False, False), get_advance_width(font, True, False))
+        get_advance_width(font, False, True), get_advance_width(font, False, False),
+        get_advance_width(font, True, True), get_advance_width(font, True, False))
 
 def get_btb_metrics(font):
     """ Get the baseline to baseline distance for all three metrics """
@@ -283,30 +286,65 @@ def get_btb_metrics(font):
     win_btb = win_height + win_gap
     return (hhea_btb, typo_btb, win_btb, win_gap)
 
+def get_metrics_names():
+    """ Helper to get the line metrics names consistent """
+    return ['HHEA','TYPO','WIN']
+
+def get_old_average_x_width(font):
+    """ Determine xAvgCharWidth of the OS/2 table """
+    # Fontforge can not create fonts with old (i.e. prior to OS/2 version 3)
+    # table values, but some very old applications do need them sometimes
+    # https://learn.microsoft.com/en-us/typography/opentype/spec/os2#xavgcharwidth
+    s = 0
+    weights = {
+        'a': 64, 'b': 14, 'c': 27, 'd': 35, 'e': 100, 'f': 20, 'g': 14, 'h': 42, 'i': 63,
+        'j': 3, 'k': 6, 'l': 35, 'm': 20, 'n': 56, 'o': 56, 'p': 17, 'q': 4, 'r': 49,
+        's': 56, 't': 71, 'u': 31, 'v': 10, 'w': 18, 'x': 3, 'y': 18, 'z': 2, 32: 166,
+    }
+    for g in weights:
+        if g not in font:
+            logger.critical("Can not determine ancient style xAvgCharWidth")
+            sys.exit(1)
+        s += font[g].width * weights[g]
+    return int(s / 1000)
+
+def create_filename(fonts):
+    """ Determine filename from font object(s) """
+    # Only consider the standard (i.e. English-US) names
+    sfnt = { k: v for l, k, v in fonts[0].sfnt_names if l == 'English (US)' }
+    sfnt_pfam = sfnt.get('Preferred Family', sfnt['Family'])
+    sfnt_psubfam = sfnt.get('Preferred Styles', sfnt['SubFamily'])
+    if len(fonts) > 1:
+        return sfnt_pfam
+    if len(sfnt_psubfam) > 0:
+        sfnt_psubfam = '-' + sfnt_psubfam
+    return (sfnt_pfam + sfnt_psubfam).replace(' ', '')
+
 
 class font_patcher:
-    def __init__(self, args):
+    def __init__(self, args, conf):
         self.args = args  # class 'argparse.Namespace'
         self.sym_font_args = []
-        self.config = None  # class 'configparser.ConfigParser'
+        self.config = conf  # class 'configparser.ConfigParser'
         self.sourceFont = None  # class 'fontforge.font'
         self.patch_set = None  # class 'list'
         self.font_dim = None  # class 'dict'
         self.font_extrawide = False
         self.source_monospaced = None # Later True or False
+        self.symbolsonly = False # Are we generating the SymbolsOnly font?
         self.onlybitmaps = 0
         self.essential = set()
-        self.config = configparser.ConfigParser(empty_lines_in_values=False, allow_no_value=True)
+        self.xavgwidth = [] # list of ints
 
     def patch(self, font):
         self.sourceFont = font
         self.setup_version()
-        self.get_essential_references()
-        self.setup_name_backup(font)
         self.assert_monospace()
         self.remove_ligatures()
-        self.setup_patch_set()
+        self.manipulate_hints()
+        self.get_essential_references()
         self.get_sourcefont_dimensions()
+        self.setup_patch_set()
         self.improve_line_dimensions()
         self.sourceFont.encoding = 'UnicodeFull'  # Update the font encoding to ensure that the Unicode glyphs are available
         self.onlybitmaps = self.sourceFont.onlybitmaps  # Fetch this property before adding outlines. NOTE self.onlybitmaps initialized and never used
@@ -318,7 +356,7 @@ class font_patcher:
 
         # For very wide (almost square or wider) fonts we do not want to generate 2 cell wide Powerline glyphs
         if self.font_dim['height'] * 1.8 < self.font_dim['width'] * 2:
-            print("Very wide and short font, disabling 2 cell Powerline glyphs")
+            logger.warning("Very wide and short font, disabling 2 cell Powerline glyphs")
             self.font_extrawide = True
 
         # Prevent opening and closing the fontforge font. Makes things faster when patching
@@ -327,8 +365,12 @@ class font_patcher:
         symfont = None
 
         if not os.path.isdir(self.args.glyphdir):
-            sys.exit("{}: Can not find symbol glyph directory {} "
-                "(probably you need to download the src/glyphs/ directory?)".format(projectName, self.args.glyphdir))
+            logger.critical("Can not find symbol glyph directory %s "
+                "(probably you need to download the src/glyphs/ directory?)", self.args.glyphdir)
+            sys.exit(1)
+
+        if self.args.dry_run:
+            return
 
         for patch in self.patch_set:
             if patch['Enabled']:
@@ -337,13 +379,16 @@ class font_patcher:
                     if symfont:
                         symfont.close()
                         symfont = None
-                    if not os.path.isfile(self.args.glyphdir + patch['Filename']):
-                        sys.exit("{}: Can not find symbol source for '{}'\n{:>{}}  (i.e. {})".format(
-                            projectName, patch['Name'], '', len(projectName), self.args.glyphdir + patch['Filename']))
-                    if not os.access(self.args.glyphdir + patch['Filename'], os.R_OK):
-                        sys.exit("{}: Can not open symbol source for '{}'\n{:>{}}  (i.e. {})".format(
-                            projectName, patch['Name'], '', len(projectName), self.args.glyphdir + patch['Filename']))
-                    symfont = fontforge.open(os.path.join(self.args.glyphdir, patch['Filename']))
+                    symfont_file = os.path.join(self.args.glyphdir, patch['Filename'])
+                    if not os.path.isfile(symfont_file):
+                        logger.critical("Can not find symbol source for '%s' (i.e. %s)",
+                            patch['Name'], symfont_file)
+                        sys.exit(1)
+                    if not os.access(symfont_file, os.R_OK):
+                        logger.critical("Can not open symbol source for '%s' (i.e. %s)",
+                            patch['Name'], symfont_file)
+                        sys.exit(1)
+                    symfont = fontforge.open(symfont_file)
                     symfont.encoding = 'UnicodeFull'
 
                     # Match the symbol font size to the source font size
@@ -384,14 +429,20 @@ class font_patcher:
                     break
             outfile = os.path.normpath(os.path.join(
                 sanitize_filename(self.args.outputdir, True),
-                sanitize_filename(sourceFont.familyname) + ".ttc"))
+                sanitize_filename(create_filename(sourceFonts)) + ".ttc"))
             sourceFonts[0].generateTtc(outfile, sourceFonts[1:], flags=gen_flags, layer=layer)
-            message = "   Generated {} fonts\n   \===> '{}'".format(len(sourceFonts), outfile)
+            message = "   Generated {} fonts\n   \\===> '{}'".format(len(sourceFonts), outfile)
         else:
+            fontname = create_filename(sourceFonts)
             # FOR SARASA
             fontname = sourceFont.familyname
+
             if not fontname:
                 fontname = sourceFont.cidfontname
+            outfile = os.path.normpath(os.path.join(
+                sanitize_filename(self.args.outputdir, True),
+                sanitize_filename(fontname) + self.args.extension))
+
             # FOR SARASA
             outfile = os.path.normpath(
                 os.path.join(sanitize_filename(self.args.outputdir, True),
@@ -402,36 +453,52 @@ class font_patcher:
                                  ).replace(" ", "")
                              + self.args.extension)).lower()
             bitmaps = str()
-            if len(self.sourceFont.bitmapSizes):
-                if not self.args.quiet:
-                    print("Preserving bitmaps {}".format(self.sourceFont.bitmapSizes))
+            if len(sourceFont.bitmapSizes):
+                logger.debug("Preserving bitmaps %s", repr(sourceFont.bitmapSizes))
                 bitmaps = str('otf') # otf/ttf, both is bf_ttf
+            if self.args.dry_run:
+                logger.debug("=====> Filename '%s'", outfile)
+                return
             sourceFont.generate(outfile, bitmap_type=bitmaps, flags=gen_flags)
-            message = "   {}\n   \===> '{}'".format(self.sourceFont.fullname, outfile)
+            message = "   {}\n   \\===> '{}'".format(sourceFont.fullname, outfile)
 
         # Adjust flags that can not be changed via fontforge
-        if re.search('\\.[ot]tf$', self.args.font, re.IGNORECASE) and re.search('\\.[ot]tf$', outfile, re.IGNORECASE):
+        if re.search(r'\.[ot]tf$', self.args.font, re.IGNORECASE) and re.search(r'\.[ot]tf$', outfile, re.IGNORECASE):
+            if not os.path.isfile(outfile) or os.path.getsize(outfile) < 1:
+                logger.critical("Something went wrong and Fontforge did not generate the new font - look for messages above")
+                sys.exit(1)
             try:
                 source_font = TableHEADWriter(self.args.font)
                 dest_font = TableHEADWriter(outfile)
                 for idx in range(source_font.num_fonts):
-                    if not self.args.quiet:
-                        print("{}: Tweaking {}/{}".format(projectName, idx + 1, source_font.num_fonts))
+                    logger.debug("Tweaking %d/%d", idx + 1, source_font.num_fonts)
+                    xwidth_s = ''
+                    xwidth = self.xavgwidth[idx] if len(self.xavgwidth) > idx else None
+                    if isinstance(xwidth, int):
+                        if isinstance(xwidth, bool) and xwidth:
+                            source_font.find_table([b'OS/2'], idx)
+                            xwidth = source_font.getshort('avgWidth')
+                            xwidth_s = ' (copied from source)'
+                        dest_font.find_table([b'OS/2'], idx)
+                        d_xwidth = dest_font.getshort('avgWidth')
+                        if d_xwidth != xwidth:
+                            logger.debug("Changing xAvgCharWidth from %d to %d%s", d_xwidth, xwidth, xwidth_s)
+                            dest_font.putshort(xwidth, 'avgWidth')
+                            dest_font.reset_table_checksum()
                     source_font.find_head_table(idx)
                     dest_font.find_head_table(idx)
                     if source_font.flags & 0x08 == 0 and dest_font.flags & 0x08 != 0:
-                        if not self.args.quiet:
-                            print("Changing flags from 0x{:X} to 0x{:X}".format(dest_font.flags, dest_font.flags & ~0x08))
+                        logger.debug("Changing flags from 0x%X to 0x%X", dest_font.flags, dest_font.flags & ~0x08)
                         dest_font.putshort(dest_font.flags & ~0x08, 'flags') # clear 'ppem_to_int'
                     if source_font.lowppem != dest_font.lowppem:
-                        if not self.args.quiet:
-                            print("Changing lowestRecPPEM from {} to {}".format(dest_font.lowppem, source_font.lowppem))
+                        logger.debug("Changing lowestRecPPEM from %d to %d", dest_font.lowppem, source_font.lowppem)
                         dest_font.putshort(source_font.lowppem, 'lowestRecPPEM')
                     if dest_font.modified:
                         dest_font.reset_table_checksum()
-                        dest_font.reset_full_checksum()
+                if dest_font.modified:
+                    dest_font.reset_full_checksum()
             except Exception as error:
-                print("Can not handle font flags ({})".format(repr(error)))
+                logger.error("Can not handle font flags (%s)", repr(error))
             finally:
                 try:
                     source_font.close()
@@ -439,16 +506,18 @@ class font_patcher:
                 except:
                     pass
         if self.args.is_variable:
-            print("Warning: Source font is a variable open type font (VF) and the patch results will most likely not be what you want")
+            logger.critical("Source font is a variable open type font (VF) and the patch results will most likely not be what you want")
         print(message)
 
         # FOR SARASA: build hdmx table
         print("Building hdmx table and fix post table")
         post_fix(outfile)
 
+
         if self.args.postprocess:
             subprocess.call([self.args.postprocess, outfile])
-            print("\nPost Processed: {}".format(outfile))
+            print("\n")
+            logger.info("Post Processed: %s", outfile)
 
 
     def setup_name_backup(self, font):
@@ -466,39 +535,98 @@ class font_patcher:
             font.fullname = font.persistent["fullname"]
         if isinstance(font.persistent["familyname"], str):
             font.familyname = font.persistent["familyname"]
-        verboseAdditionalFontNameSuffix = " " + projectNameSingular
-        if self.args.windows:  # attempt to shorten here on the additional name BEFORE trimming later
-            additionalFontNameSuffix = " " + projectNameAbbreviation
-        else:
-            additionalFontNameSuffix = verboseAdditionalFontNameSuffix
+        verboseAdditionalFontNameSuffix = ""
+        additionalFontNameSuffix = ""
+
+        if not self.args.complete:
+            # NOTE not all symbol fonts have appended their suffix here
+            if self.args.fontawesome:
+                additionalFontNameSuffix += " A"
+                verboseAdditionalFontNameSuffix += " Plus Font Awesome"
+            if self.args.fontawesomeextension:
+                additionalFontNameSuffix += " AE"
+                verboseAdditionalFontNameSuffix += " Plus Font Awesome Extension"
+            if self.args.octicons:
+                additionalFontNameSuffix += " O"
+                verboseAdditionalFontNameSuffix += " Plus Octicons"
+            if self.args.powersymbols:
+                additionalFontNameSuffix += " PS"
+                verboseAdditionalFontNameSuffix += " Plus Power Symbols"
+            if self.args.codicons:
+                additionalFontNameSuffix += " C"
+                verboseAdditionalFontNameSuffix += " Plus Codicons"
+            if self.args.pomicons:
+                additionalFontNameSuffix += " P"
+                verboseAdditionalFontNameSuffix += " Plus Pomicons"
+            if self.args.fontlogos:
+                additionalFontNameSuffix += " L"
+                verboseAdditionalFontNameSuffix += " Plus Font Logos"
+            if self.args.material:
+                additionalFontNameSuffix += " MDI"
+                verboseAdditionalFontNameSuffix += " Plus Material Design Icons"
+            if self.args.weather:
+                additionalFontNameSuffix += " WEA"
+                verboseAdditionalFontNameSuffix += " Plus Weather Icons"
+
+
         # FOR SARASA: clean file name
         additionalFontNameSuffix = " " + projectNameSingular
         verboseAdditionalFontNameSuffix = " " + projectNameSingular
 
-        # add mono signifier to end of name
-        # FOR SARASA: clean file name
-        # if self.args.single:
-        #     additionalFontNameSuffix += " M"
-        #     verboseAdditionalFontNameSuffix += " Mono"
+        # add mono signifier to beginning of name suffix
+        if self.args.single:
+            variant_abbrev = "M"
+            variant_full = " Mono"
+        elif self.args.nonmono and not self.symbolsonly:
+            variant_abbrev = "P"
+            variant_full = " Propo"
+        else:
+            variant_abbrev = ""
+            variant_full = ""
 
-        if FontnameParserOK and self.args.makegroups:
-            use_fullname = isinstance(font.fullname, str) # Usually the fullname is better to parse
-            # Use fullname if it is 'equal' to the fontname
-            if font.fullname:
-                use_fullname |= font.fontname.lower() == FontnameTools.postscript_char_filter(font.fullname).lower()
-            # Use fullname for any of these source fonts (that are impossible to disentangle from the fontname, we need the blanks)
-            for hit in [ 'Meslo' ]:
-                use_fullname |= font.fontname.lower().startswith(hit.lower())
-            parser_name = font.fullname if use_fullname else font.fontname
-            # Gohu fontnames hide the weight, but the file names are ok...
-            if parser_name.startswith('Gohu'):
-                parser_name = os.path.splitext(os.path.basename(self.args.font))[0]
-            n = FontnameParser(parser_name)
+        variant_abbrev = ""
+        variant_full = ""
+        ps_suffix = projectNameAbbreviation + variant_abbrev + additionalFontNameSuffix
+
+        # add 'Nerd Font' to beginning of name suffix
+        verboseAdditionalFontNameSuffix = " " + projectNameSingular + variant_full + verboseAdditionalFontNameSuffix
+        additionalFontNameSuffix = " " + projectNameSingular + variant_full + additionalFontNameSuffix
+
+        if FontnameParserOK and self.args.makegroups > 0:
+            user_supplied_name = False # User supplied names are kept unchanged
+            if not isinstance(self.args.force_name, str):
+                use_fullname = isinstance(font.fullname, str) # Usually the fullname is better to parse
+                # Use fullname if it is 'equal' to the fontname
+                if font.fullname:
+                    use_fullname |= font.fontname.lower() == FontnameTools.postscript_char_filter(font.fullname).lower()
+                # Use fullname for any of these source fonts (that are impossible to disentangle from the fontname, we need the blanks)
+                for hit in [ 'Meslo' ]:
+                    use_fullname |= font.fontname.lower().startswith(hit.lower())
+                parser_name = font.fullname if use_fullname else font.fontname
+                # Gohu fontnames hide the weight, but the file names are ok...
+                if parser_name.startswith('Gohu'):
+                    parser_name = os.path.splitext(os.path.basename(self.args.font))[0]
+            else:
+                if self.args.force_name == 'full':
+                    parser_name = font.fullname
+                elif self.args.force_name == 'postscript':
+                    parser_name = font.fontname
+                elif self.args.force_name == 'filename':
+                    parser_name = os.path.basename(font.path).split('.')[0]
+                else:
+                    parser_name = self.args.force_name
+                    user_supplied_name = True
+                if not isinstance(parser_name, str) or len(parser_name) < 1:
+                    logger.critical("Specified --name not usable because the name will be empty")
+                    sys.exit(2)
+            n = FontnameParser(parser_name, logger)
             if not n.parse_ok:
-                print("Have only minimal naming information, check resulting name. Maybe omit --makegroups option")
+                logger.warning("Have only minimal naming information, check resulting name. Maybe specify --makegroups 0")
             n.drop_for_powerline()
-            n.enable_short_families(True, "Noto")
-            n.set_for_windows(self.args.windows)
+            n.enable_short_families(not user_supplied_name, self.args.makegroups in [ 2, 3, 5, 6, ], self.args.makegroups in [ 3, 6, ])
+            if not n.set_expect_no_italic(self.args.noitalic):
+                logger.critical("Detected 'Italic' slant but --has-no-italic specified")
+                sys.exit(1)
 
             # All the following stuff is ignored in makegroups-mode
 
@@ -511,6 +639,7 @@ class font_patcher:
 
         # dont trust 'font.familyname'
         familyname = fontname
+
         # FOR SARASA
         familyname = "Sarasa Term SC"
         fallbackStyle = get_subfamily(font.fontname)
@@ -549,23 +678,7 @@ class font_patcher:
         if len(subFamily) == 0:
             subFamily = "Regular"
 
-        if self.args.windows:
-            maxFamilyLength = 31
-            maxFontLength = maxFamilyLength - len('-' + subFamily)
-            familyname += " " + projectNameAbbreviation
-            if self.args.single:
-                familyname += "M"
-            fullname += " Windows Compatible"
-
-            # now make sure less than 32 characters name length
-            if len(fontname) > maxFontLength:
-                fontname = fontname[:maxFontLength]
-            if len(familyname) > maxFamilyLength:
-                familyname = familyname[:maxFamilyLength]
-        else:
-            familyname += " " + projectNameSingular
-            if self.args.single:
-                familyname += " Mono"
+        familyname += " " + projectNameSingular + variant_full
 
         # Don't truncate the subfamily to keep fontname unique.  MacOS treats fonts with
         # the same name as the same font, even if subFamily is different. Make sure to
@@ -578,6 +691,10 @@ class font_patcher:
         reservedFontNameReplacements = {
             'source'         : 'sauce',
             'Source'         : 'Sauce',
+            'Bitstream Vera Sans Mono' : 'Bitstrom Wera',
+            'BitstreamVeraSansMono' : 'BitstromWera',
+            'bitstream vera sans mono' : 'bitstrom wera',
+            'bitstreamverasansmono' : 'bitstromwera',
             'hermit'         : 'hurmit',
             'Hermit'         : 'Hurmit',
             'hasklig'        : 'hasklug',
@@ -613,6 +730,9 @@ class font_patcher:
             'fira sans'      : 'fura sans',
             'firamono'       : 'furamono',
             'firasans'       : 'furasans',
+            'IntelOneMono'   : 'IntoneMono',
+            'IntelOne Mono'  : 'Intone Mono',
+            'Intel One Mono' : 'Intone Mono',
         }
 
         # remove overly verbose font names
@@ -627,8 +747,12 @@ class font_patcher:
         }
 
         projectInfo = (
+            # "Patched with '" + projectName + " Patcher' (https://github.com/ryanoasis/nerd-fonts)\n\n"
             "Patched with 'Sarasa Term SC Nerd Patcher' (https://github.com/laishulu/Sarasa-Term-SC-Nerd)\n\n"
+            "* Website: https://www.nerdfonts.com\n"
             "* Version: " + version + "\n"
+            # "* Development Website: https://github.com/ryanoasis/nerd-fonts\n"
+            # "* Changelog: https://github.com/ryanoasis/nerd-fonts/blob/-/changelog.md"
         )
 
         familyname = replace_font_name(familyname, reservedFontNameReplacements)
@@ -641,12 +765,17 @@ class font_patcher:
         fullname   = replace_font_name(fullname,   additionalFontNameReplacements2)
         fontname   = replace_font_name(fontname,   additionalFontNameReplacements2)
 
-        if not (FontnameParserOK and self.args.makegroups):
+        if self.args.makegroups < 0:
+            logger.warning("Renaming disabled! Make sure to comply with font license, esp RFN clause!")
+        elif not (FontnameParserOK and self.args.makegroups > 0):
             # replace any extra whitespace characters:
             font.familyname = " ".join(familyname.split())
+            font.fullname   = " ".join(fullname.split())
+            font.fontname   = " ".join(fontname.split())
+
             # FOR SARASA
-            font.fullname   = font.familyname + " " + subFamily
-            font.fontname   = font.familyname.replace(
+            font.fullname = font.familyname + " " + subFamily
+            font.fontname = font.familyname.replace(
                 " ", "-") + "-" + subFamily.replace(" ", "-")
 
             font.appendSFNTName(str("English (US)"), str("UniqueID"), font.fullname)
@@ -672,17 +801,19 @@ class font_patcher:
                     font.appendSFNTName(str('Chinese (PRC)'), str('SubFamily'), "Regular")
 
             font.appendSFNTName(str('English (US)'), str('Preferred Family'), font.familyname)
+            # font.appendSFNTName(str('English (US)'), str('Family'), font.familyname)
+            # font.appendSFNTName(str('English (US)'), str('Compatible Full'), font.fullname)
+            # font.appendSFNTName(str('English (US)'), str('SubFamily'), subFamily)
+
             font.appendSFNTName(str('Chinese (PRC)'), str('Preferred Family'), chn(font.familyname))
             font.appendSFNTName(str('English (US)'), str('Preferred Styles'), subFamily)
             font.appendSFNTName(str('Chinese (PRC)'), str('Preferred Styles'), subFamily)
         else:
-            fam_suffix = projectNameSingular if not self.args.windows else projectNameAbbreviation
-            if self.args.single:
-                if self.args.windows:
-                    fam_suffix += 'M'
-                else:
-                    fam_suffix += ' Mono'
-            n.inject_suffix(verboseAdditionalFontNameSuffix, additionalFontNameSuffix, fam_suffix)
+            # Add Nerd Font suffix unless user specifically asked for some excplicit name via --name
+            if not user_supplied_name:
+                short_family = projectNameAbbreviation + variant_abbrev if self.args.makegroups >= 4 else projectNameSingular + variant_full
+                # inject_suffix(family, ps_fontname, short_family)
+                n.inject_suffix(verboseAdditionalFontNameSuffix, ps_suffix, short_family)
             n.rename_font(font)
 
         font.comment = projectInfo
@@ -698,28 +829,50 @@ class font_patcher:
             self.sourceFont.version = str(self.sourceFont.cidversion) + ";" + projectName + " " + version
         self.sourceFont.sfntRevision = None # Auto-set (refreshed) by fontforge
         self.sourceFont.appendSFNTName(str('English (US)'), str('Version'), "Version " + self.sourceFont.version)
+
         # FOR SARASA: set version
         self.sourceFont.appendSFNTName(str('Chinese (PRC)'), str('Version'), "版本 " + self.sourceFont.version)
+
+        # The Version SFNT name is later reused by the NameParser for UniqueID
         # print("Version now is {}".format(sourceFont.version))
 
 
     def remove_ligatures(self):
         # let's deal with ligatures (mostly for monospaced fonts)
-        # the tables have been removed from the repo with >this< commit
-        if self.args.configfile and self.config.read(self.args.configfile):
-            if self.args.removeligatures:
-                print("Removing ligatures from configfile `Subtables` section")
-                ligature_subtables = json.loads(self.config.get("Subtables", "ligatures"))
-                for subtable in ligature_subtables:
-                    print("Removing subtable:", subtable)
-                    try:
-                        self.sourceFont.removeLookupSubtable(subtable)
-                        print("Successfully removed subtable:", subtable)
-                    except Exception:
-                        print("Failed to remove subtable:", subtable)
-        elif self.args.removeligatures:
-            print("Unable to read configfile, unable to remove ligatures")
+        # Usually removes 'fi' ligs that end up being only one cell wide, and 'ldot'
+        if self.args.removeligatures:
+            logger.info("Removing ligatures from configfile `Subtables` section")
+            if 'Subtables' not in self.config:
+                logger.warning("No ligature data (config file missing?)")
+                return
+            ligature_subtables = json.loads(self.config.get('Subtables', 'ligatures', fallback='[]'))
+            for subtable in ligature_subtables:
+                logger.debug("Removing subtable: %s", subtable)
+                try:
+                    self.sourceFont.removeLookupSubtable(subtable)
+                    logger.debug("Successfully removed subtable: %s", subtable)
+                except Exception:
+                    logger.error("Failed to remove subtable: %s", subtable)
 
+
+    def manipulate_hints(self):
+        """ Redo the hinting on some problematic glyphs """
+        if 'Hinting' not in self.config:
+            return
+        redo = json.loads(self.config.get('Hinting', 're_hint', fallback='[]'))
+        if not len(redo):
+            return
+        logger.debug("Working on {} rehinting rules (this may create a lot of fontforge warnings)".format(len(redo)))
+        count = 0
+        for gname in self.sourceFont:
+            for regex in redo:
+                if re.fullmatch(regex, gname):
+                    glyph = self.sourceFont[gname]
+                    glyph.autoHint()
+                    glyph.autoInstr()
+                    count += 1
+                    break
+        logger.info("Rehinted {} glyphs".format(count))
 
     def assert_monospace(self):
         # Check if the sourcefont is monospaced
@@ -728,18 +881,21 @@ class font_patcher:
         if self.args.nonmono:
             return
         panose_mono = check_panose_monospaced(self.sourceFont)
+        logger.debug("Monospace check: %s; glyph-width-mono %s",
+            panose_check_to_text(panose_mono, self.sourceFont.os2_panose), repr(width_mono))
         # The following is in fact "width_mono != panose_mono", but only if panose_mono is not 'unknown'
         if (width_mono and panose_mono == 0) or (not width_mono and panose_mono == 1):
-            print("  Warning: Monospaced check: Panose assumed to be wrong")
-            print("  {} and {}".format(
+            logger.warning("Monospaced check: Panose assumed to be wrong")
+            logger.warning("Monospaced check: %s and %s",
                 report_advance_widths(self.sourceFont),
-                panose_check_to_text(panose_mono, self.sourceFont.os2_panose)))
+                panose_check_to_text(panose_mono, self.sourceFont.os2_panose))
         if self.args.single and not width_mono:
-            print("  Warning: Sourcefont is not monospaced - forcing to monospace not advisable, results might be useless")
-            if offending_char is not None:
-                print("           Offending char: 0x{:X}".format(offending_char))
+            logger.warning("Sourcefont is not monospaced - forcing to monospace not advisable, "
+                "results might be useless%s",
+                " - offending char: {:X}".format(offending_char) if offending_char is not None else "")
             if self.args.single <= 1:
-                sys.exit(projectName + ": Font will not be patched! Give --mono (or -s, or --use-single-width-glyphs) twice to force patching")
+                logger.critical("Font will not be patched! Give --mono (or -s, or --use-single-width-glyphs) twice to force patching")
+                sys.exit(1)
         if width_mono:
             force_panose_monospaced(self.sourceFont)
         # FOR SARASA
@@ -749,93 +905,101 @@ class font_patcher:
     def setup_patch_set(self):
         """ Creates list of dicts to with instructions on copying glyphs from each symbol font into self.sourceFont """
 
-        box_enabled = self.source_monospaced # Box glyph only for monospaced
-        if box_enabled:
+        box_enabled = self.source_monospaced and not self.symbolsonly # Box glyph only for monospaced and not for Symbols Only
+        box_keep = False
+        if box_enabled or self.args.forcebox:
             self.sourceFont.selection.select(("ranges",), 0x2500, 0x259f)
             box_glyphs_target = len(list(self.sourceFont.selection))
             box_glyphs_current = len(list(self.sourceFont.selection.byGlyphs))
-            if box_glyphs_target > box_glyphs_current:
-                # Sourcefont does not have all of these glyphs, do not mix sets
-                if not self.args.quiet and box_glyphs_current > 0:
-                    print("INFO: {}/{} box drawing glyphs will be replaced".format(
-                        box_glyphs_current, box_glyphs_target))
-                box_keep = False
+            if box_glyphs_target > box_glyphs_current or self.args.forcebox:
+                # Sourcefont does not have all of these glyphs, do not mix sets (overwrite existing)
+                if box_glyphs_current > 0:
+                    logger.debug("%d/%d box drawing glyphs will be replaced",
+                        box_glyphs_current, box_glyphs_target)
                 box_enabled = True
             else:
-                box_keep = True # just scale do not copy
+                # Sourcefont does have all of these glyphs
+                # box_keep = True # just scale do not copy (need to scale to fit new cell size)
                 box_enabled = False # Cowardly not scaling existing glyphs, although the code would allow this
 
         # Stretch 'xz' or 'pa' (preserve aspect ratio)
-        # Supported params: overlap | careful | xy-ratio | dont_copy
+        # Supported params: overlap | careful | xy-ratio | dont_copy | ypadding
         # Overlap value is used horizontally but vertically limited to 0.01
         # Careful does not overwrite/modify existing glyphs
         # The xy-ratio limits the x-scale for a given y-scale to make the ratio <= this value (to prevent over-wide glyphs)
         # '1' means occupu 1 cell (default for 'xy')
         # '2' means occupy 2 cells (default for 'pa')
         # '!' means do the 'pa' scaling even with non mono fonts (else it just scales down, never up)
+        # '^' means that scaling shall fill the whole cell and not only the icon-cap-height (for mono fonts, other always use the whole cell)
         # Dont_copy does not overwrite existing glyphs but rescales the preexisting ones
+        #
+        # Be careful, stretch may not change within a ScaleRule!
 
         SYM_ATTR_DEFAULT = {
             'default': {'align': 'c', 'valign': 'c', 'stretch': 'pa', 'params': {}}
         }
         SYM_ATTR_POWERLINE = {
-            'default': {'align': 'c', 'valign': 'c', 'stretch': 'pa', 'params': {}},
+            'default': {'align': 'c', 'valign': 'c', 'stretch': '^pa', 'params': {}},
 
             # Arrow tips
-            0xe0b0: {'align': 'l', 'valign': 'c', 'stretch': 'xy', 'params': {'overlap': 0.02, 'xy-ratio': 0.7}},
-            0xe0b1: {'align': 'l', 'valign': 'c', 'stretch': 'xy', 'params': {'xy-ratio': 0.7}},
-            0xe0b2: {'align': 'r', 'valign': 'c', 'stretch': 'xy', 'params': {'overlap': 0.02, 'xy-ratio': 0.7}},
-            0xe0b3: {'align': 'r', 'valign': 'c', 'stretch': 'xy', 'params': {'xy-ratio': 0.7}},
+            0xe0b0: {'align': 'l', 'valign': 'c', 'stretch': '^xy', 'params': {'overlap': 0.06, 'xy-ratio': 0.7}},
+            0xe0b1: {'align': 'l', 'valign': 'c', 'stretch': '^xy', 'params': {'xy-ratio': 0.7}},
+            0xe0b2: {'align': 'r', 'valign': 'c', 'stretch': '^xy', 'params': {'overlap': 0.06, 'xy-ratio': 0.7}},
+            0xe0b3: {'align': 'r', 'valign': 'c', 'stretch': '^xy', 'params': {'xy-ratio': 0.7}},
+
+            # Inverse arrow tips
+            0xe0d6: {'align': 'l', 'valign': 'c', 'stretch': '^xy', 'params': {'overlap': 0.05, 'xy-ratio': 0.7}},
+            0xe0d7: {'align': 'r', 'valign': 'c', 'stretch': '^xy', 'params': {'overlap': 0.05, 'xy-ratio': 0.7}},
 
             # Rounded arcs
-            0xe0b4: {'align': 'l', 'valign': 'c', 'stretch': 'xy', 'params': {'overlap': 0.01, 'xy-ratio': 0.59}},
-            0xe0b5: {'align': 'l', 'valign': 'c', 'stretch': 'xy', 'params': {'xy-ratio': 0.5}},
-            0xe0b6: {'align': 'r', 'valign': 'c', 'stretch': 'xy', 'params': {'overlap': 0.01, 'xy-ratio': 0.59}},
-            0xe0b7: {'align': 'r', 'valign': 'c', 'stretch': 'xy', 'params': {'xy-ratio': 0.5}},
+            0xe0b4: {'align': 'l', 'valign': 'c', 'stretch': '^xy', 'params': {'overlap': 0.06, 'xy-ratio': 0.59}},
+            0xe0b5: {'align': 'l', 'valign': 'c', 'stretch': '^xy', 'params': {'xy-ratio': 0.5}},
+            0xe0b6: {'align': 'r', 'valign': 'c', 'stretch': '^xy', 'params': {'overlap': 0.06, 'xy-ratio': 0.59}},
+            0xe0b7: {'align': 'r', 'valign': 'c', 'stretch': '^xy', 'params': {'xy-ratio': 0.5}},
 
             # Bottom Triangles
-            0xe0b8: {'align': 'l', 'valign': 'c', 'stretch': 'xy', 'params': {'overlap': 0.02}},
-            0xe0b9: {'align': 'l', 'valign': 'c', 'stretch': 'xy', 'params': {}},
-            0xe0ba: {'align': 'r', 'valign': 'c', 'stretch': 'xy', 'params': {'overlap': 0.02}},
-            0xe0bb: {'align': 'r', 'valign': 'c', 'stretch': 'xy', 'params': {}},
+            0xe0b8: {'align': 'l', 'valign': 'c', 'stretch': '^xy', 'params': {'overlap': 0.02}},
+            0xe0b9: {'align': 'l', 'valign': 'c', 'stretch': '^xy', 'params': {}},
+            0xe0ba: {'align': 'r', 'valign': 'c', 'stretch': '^xy', 'params': {'overlap': 0.02}},
+            0xe0bb: {'align': 'r', 'valign': 'c', 'stretch': '^xy', 'params': {}},
 
             # Top Triangles
-            0xe0bc: {'align': 'l', 'valign': 'c', 'stretch': 'xy', 'params': {'overlap': 0.02}},
-            0xe0bd: {'align': 'l', 'valign': 'c', 'stretch': 'xy', 'params': {}},
-            0xe0be: {'align': 'r', 'valign': 'c', 'stretch': 'xy', 'params': {'overlap': 0.02}},
-            0xe0bf: {'align': 'r', 'valign': 'c', 'stretch': 'xy', 'params': {}},
+            0xe0bc: {'align': 'l', 'valign': 'c', 'stretch': '^xy', 'params': {'overlap': 0.02}},
+            0xe0bd: {'align': 'l', 'valign': 'c', 'stretch': '^xy', 'params': {}},
+            0xe0be: {'align': 'r', 'valign': 'c', 'stretch': '^xy', 'params': {'overlap': 0.02}},
+            0xe0bf: {'align': 'r', 'valign': 'c', 'stretch': '^xy', 'params': {}},
 
             # Flames
-            0xe0c0: {'align': 'l', 'valign': 'c', 'stretch': 'xy2', 'params': {'overlap': 0.01}},
-            0xe0c1: {'align': 'l', 'valign': 'c', 'stretch': 'xy2', 'params': {}},
-            0xe0c2: {'align': 'r', 'valign': 'c', 'stretch': 'xy2', 'params': {'overlap': 0.01}},
-            0xe0c3: {'align': 'r', 'valign': 'c', 'stretch': 'xy2', 'params': {}},
+            0xe0c0: {'align': 'l', 'valign': 'c', 'stretch': '^xy2', 'params': {'overlap': 0.01}},
+            0xe0c1: {'align': 'l', 'valign': 'c', 'stretch': '^xy2', 'params': {}},
+            0xe0c2: {'align': 'r', 'valign': 'c', 'stretch': '^xy2', 'params': {'overlap': 0.01}},
+            0xe0c3: {'align': 'r', 'valign': 'c', 'stretch': '^xy2', 'params': {}},
 
             # Small squares
-            0xe0c4: {'align': 'l', 'valign': 'c', 'stretch': 'xy2', 'params': {'overlap': -0.03, 'xy-ratio': 0.86}},
-            0xe0c5: {'align': 'r', 'valign': 'c', 'stretch': 'xy2', 'params': {'overlap': -0.03, 'xy-ratio': 0.86}},
+            0xe0c4: {'align': 'l', 'valign': 'c', 'stretch': '^xy2', 'params': {'overlap': -0.03, 'xy-ratio': 0.86}},
+            0xe0c5: {'align': 'r', 'valign': 'c', 'stretch': '^xy2', 'params': {'overlap': -0.03, 'xy-ratio': 0.86}},
 
             # Bigger squares
-            0xe0c6: {'align': 'l', 'valign': 'c', 'stretch': 'xy2', 'params': {'overlap': -0.03, 'xy-ratio': 0.78}},
-            0xe0c7: {'align': 'r', 'valign': 'c', 'stretch': 'xy2', 'params': {'overlap': -0.03, 'xy-ratio': 0.78}},
+            0xe0c6: {'align': 'l', 'valign': 'c', 'stretch': '^xy2', 'params': {'overlap': -0.03, 'xy-ratio': 0.78}},
+            0xe0c7: {'align': 'r', 'valign': 'c', 'stretch': '^xy2', 'params': {'overlap': -0.03, 'xy-ratio': 0.78}},
 
             # Waveform
-            0xe0c8: {'align': 'l', 'valign': 'c', 'stretch': 'xy2', 'params': {'overlap': 0.01}},
-            0xe0ca: {'align': 'r', 'valign': 'c', 'stretch': 'xy2', 'params': {'overlap': 0.01}},
+            0xe0c8: {'align': 'l', 'valign': 'c', 'stretch': '^xy2', 'params': {'overlap': 0.01}},
+            0xe0ca: {'align': 'r', 'valign': 'c', 'stretch': '^xy2', 'params': {'overlap': 0.01}},
 
             # Hexagons
-            0xe0cc: {'align': 'l', 'valign': 'c', 'stretch': 'xy2', 'params': {'overlap': 0.02, 'xy-ratio': 0.85}},
-            0xe0cd: {'align': 'l', 'valign': 'c', 'stretch': 'xy2', 'params': {'xy-ratio': 0.865}},
+            0xe0cc: {'align': 'l', 'valign': 'c', 'stretch': '^xy2', 'params': {'overlap': 0.02, 'xy-ratio': 0.85}},
+            0xe0cd: {'align': 'l', 'valign': 'c', 'stretch': '^xy2', 'params': {'xy-ratio': 0.865}},
 
             # Legos
-            0xe0ce: {'align': 'l', 'valign': 'c', 'stretch': 'pa', 'params': {}},
-            0xe0cf: {'align': 'c', 'valign': 'c', 'stretch': 'pa', 'params': {}},
-            0xe0d0: {'align': 'l', 'valign': 'c', 'stretch': 'pa', 'params': {}},
-            0xe0d1: {'align': 'l', 'valign': 'c', 'stretch': 'pa', 'params': {}},
+            0xe0ce: {'align': 'l', 'valign': 'c', 'stretch': '^pa', 'params': {}},
+            0xe0cf: {'align': 'c', 'valign': 'c', 'stretch': '^pa', 'params': {}},
+            0xe0d0: {'align': 'l', 'valign': 'c', 'stretch': '^pa', 'params': {}},
+            0xe0d1: {'align': 'l', 'valign': 'c', 'stretch': '^pa', 'params': {}},
 
             # Top and bottom trapezoid
-            0xe0d2: {'align': 'l', 'valign': 'c', 'stretch': 'xy', 'params': {'overlap': 0.02, 'xy-ratio': 0.7}},
-            0xe0d4: {'align': 'r', 'valign': 'c', 'stretch': 'xy', 'params': {'overlap': 0.02, 'xy-ratio': 0.7}}
+            0xe0d2: {'align': 'l', 'valign': 'c', 'stretch': '^xy', 'params': {'overlap': 0.02, 'xy-ratio': 0.7}},
+            0xe0d4: {'align': 'r', 'valign': 'c', 'stretch': '^xy', 'params': {'overlap': 0.02, 'xy-ratio': 0.7}}
         }
         SYM_ATTR_TRIGRAPH = {
             'default': {'align': 'c', 'valign': 'c', 'stretch': 'pa1!', 'params': {'overlap': -0.10, 'careful': True}}
@@ -850,18 +1014,19 @@ class font_patcher:
             0xf0de: {'align': 'c', 'valign': '', 'stretch': 'pa', 'params': {}}
         }
         SYM_ATTR_HEAVYBRACKETS = {
-            'default': {'align': 'c', 'valign': 'c', 'stretch': 'pa', 'params': {'careful': True}}
+            'default': {'align': 'c', 'valign': 'c', 'stretch': '^pa1!', 'params': {'ypadding': 0.3, 'careful': True}}
         }
         SYM_ATTR_BOX = {
-            'default': {'align': 'c', 'valign': 'c', 'stretch': 'xy', 'params': {'overlap': 0.02, 'dont_copy': box_keep}},
+            'default': {'align': 'c', 'valign': 'c', 'stretch': '^xy', 'params': {'overlap': 0.02, 'dont_copy': box_keep}},
             # No overlap with checkered greys (commented out because that raises problems on rescaling clients)
             # 0x2591: {'align': 'c', 'valign': 'c', 'stretch': 'xy', 'params': {'dont_copy': box_keep}},
             # 0x2592: {'align': 'c', 'valign': 'c', 'stretch': 'xy', 'params': {'dont_copy': box_keep}},
             # 0x2593: {'align': 'c', 'valign': 'c', 'stretch': 'xy', 'params': {'dont_copy': box_keep}},
         }
         CUSTOM_ATTR = {
-            # 'pa' == preserve aspect ratio
-            'default': {'align': 'c', 'valign': '', 'stretch': '', 'params': {}}
+            # previous custom scaling => do not touch the icons
+            # 'default': {'align': 'c', 'valign': '', 'stretch': '', 'params': {}}
+            'default': {'align': 'c', 'valign': 'c', 'stretch': 'pa', 'params': {'careful': self.args.careful}}
         }
 
         # Most glyphs we want to maximize (individually) during the scale
@@ -880,6 +1045,7 @@ class font_patcher:
         #       with the same scaling and shifting. The basis for it is a 'combined
         #       bounding box' of all glyphs in that group. All glyphs are handled as
         #       if they fill that combined bounding box.
+        #  (- ScaleGroupsVert: Removed with this commit)
         #
         # The ScaleGlyph method: You set 'ScaleGlyph' to the unicode of the reference glyph.
         # Note that there can be only one per patch-set.
@@ -915,11 +1081,15 @@ class font_patcher:
             range(0x2594, 0x259f + 1), # quards (Note: quard 2597 in Hack is wrong, scales like block!)
         ]}
         CODI_SCALE_LIST = {'ScaleGroups': [
-            range(0xea99, 0xeaa1 + 1), # arrows
-            range(0xeb6e, 0xeb71 + 1), # triangles
+            [0xea61, 0xeb13], # lightbulb
             range(0xeab4, 0xeab7 + 1), # chevrons
-            [0xea71, *range(0xeaa6, 0xeaab + 1), 0xeabc, 0xeb18, 0xeb87, 0xeb88, 0xeb8a, 0xeb8c, 0xebb4], # cicles
-            [0xeacc, 0xeaba], # dash
+            [0xea7d, *range(0xea99, 0xeaa1 + 1), 0xebcb], # arrows
+            [0xeaa2, 0xeb9a, 0xec08, 0xec09], # bells
+            range(0xead4, 0xead6 + 1), # dot and arrow
+            [0xeb43, 0xec0b, 0xec0c], # (pull) request changes
+            range(0xeb6e, 0xeb71 + 1), # triangles
+            [*range(0xeb89, 0xeb8b + 1), 0xec07], # smallish dots
+            range(0xebd5, 0xebd7 + 1), # compasses
         ]}
         DEVI_SCALE_LIST = {'ScaleGlyph': 0xE60E, # Android logo
             'GlyphsToScale': [
@@ -946,14 +1116,21 @@ class font_patcher:
             range(0xf221, 0xf22d + 1), # gender or so
             range(0xf255, 0xf25b + 1), # hand symbols
         ]}
-        OCTI_SCALE_LIST = {'ScaleGlyph': 0xF02E, # looking glass (probably biggest glyph?)
+        HEAVY_SCALE_LIST = {'ScaleGlyph': 0x2771, # widest bracket, horizontally
             'GlyphsToScale': [
-                (0xf03d, 0xf040), # arrows
-                0xf044, 0xf05a, 0xf05b, 0xf0aa, # triangles
-                (0xf051, 0xf053), # small stuff
-                0xf071, 0xf09f, 0xf0a0, 0xf0a1, # small arrows
-                0xf078, 0xf0a2, 0xf0a3, 0xf0a4, # chevrons
-                0xf0ca, # dash
+                (0x276c, 0x2771) # all
+        ]}
+        OCTI_SCALE_LIST = {'ScaleGroups': [
+                [*range(0xf03d, 0xf040 + 1), 0xf019, 0xf030, 0xf04a, 0xf051,  0xf071, 0xf08c ], # arrows
+                [0xF0E7, # Smily and ...
+                    0xf044, 0xf05a, 0xf05b, 0xf0aa, # triangles
+                    0xf052, 0xf053, 0xf296, 0xf2f0, # small stuff
+                    0xf078, 0xf0a2, 0xf0a3, 0xf0a4, # chevrons
+                    0xf0ca, 0xf081, 0xf092, # dash, X, github-text
+                ],
+                [0xf09c, 0xf09f, 0xf0de], # bells
+                range(0xf2c2, 0xf2c5 + 1), # move to
+                [0xf07b, 0xf0a1, 0xf0d6, 0xf306], # bookmarks
         ]}
         WEATH_SCALE_LIST = {'ScaleGroups': [
             [0xf03c, 0xf042, 0xf045 ], # degree signs
@@ -980,30 +1157,30 @@ class font_patcher:
         # Symbol font ranges
         self.patch_set = [
             {'Enabled': True,                           'Name': "Seti-UI + Custom",        'Filename': "original-source.otf",                            'Exact': False, 'SymStart': 0xE4FA, 'SymEnd': 0xE5FF, 'SrcStart': 0xE5FA, 'ScaleRules': None,             'Attributes': SYM_ATTR_DEFAULT},
-            {'Enabled': True,                           'Name': "Heavy Angle Brackets",    'Filename': "extraglyphs.sfd",                                'Exact': True,  'SymStart': 0x276C, 'SymEnd': 0x2771, 'SrcStart': None,   'ScaleRules': None,             'Attributes': SYM_ATTR_HEAVYBRACKETS},
+            {'Enabled': True,                           'Name': "Heavy Angle Brackets",    'Filename': "extraglyphs.sfd",                                'Exact': True,  'SymStart': 0x276C, 'SymEnd': 0x2771, 'SrcStart': None,   'ScaleRules': HEAVY_SCALE_LIST, 'Attributes': SYM_ATTR_HEAVYBRACKETS},
             {'Enabled': box_enabled,                    'Name': "Box Drawing",             'Filename': "extraglyphs.sfd",                                'Exact': True,  'SymStart': 0x2500, 'SymEnd': 0x259F, 'SrcStart': None,   'ScaleRules': BOX_SCALE_LIST,   'Attributes': SYM_ATTR_BOX},
-            {'Enabled': True,                           'Name': "Devicons",                'Filename': "devicons.ttf",                                   'Exact': False, 'SymStart': 0xE600, 'SymEnd': 0xE6C5, 'SrcStart': 0xE700, 'ScaleRules': DEVI_SCALE_LIST,  'Attributes': SYM_ATTR_DEFAULT},
+            {'Enabled': True,                           'Name': "Devicons",                'Filename': "devicons/devicons.ttf",                          'Exact': False, 'SymStart': 0xE600, 'SymEnd': 0xE6C5, 'SrcStart': 0xE700, 'ScaleRules': DEVI_SCALE_LIST,  'Attributes': SYM_ATTR_DEFAULT},
             {'Enabled': self.args.powerline,            'Name': "Powerline Symbols",       'Filename': "powerline-symbols/PowerlineSymbols.otf",         'Exact': True,  'SymStart': 0xE0A0, 'SymEnd': 0xE0A2, 'SrcStart': None,   'ScaleRules': None,             'Attributes': SYM_ATTR_POWERLINE},
             {'Enabled': self.args.powerline,            'Name': "Powerline Symbols",       'Filename': "powerline-symbols/PowerlineSymbols.otf",         'Exact': True,  'SymStart': 0xE0B0, 'SymEnd': 0xE0B3, 'SrcStart': None,   'ScaleRules': None,             'Attributes': SYM_ATTR_POWERLINE},
-            {'Enabled': self.args.powerlineextra,       'Name': "Powerline Extra Symbols", 'Filename': "PowerlineExtraSymbols.otf",                      'Exact': True,  'SymStart': 0xE0A3, 'SymEnd': 0xE0A3, 'SrcStart': None,   'ScaleRules': None,             'Attributes': SYM_ATTR_POWERLINE},
-            {'Enabled': self.args.powerlineextra,       'Name': "Powerline Extra Symbols", 'Filename': "PowerlineExtraSymbols.otf",                      'Exact': True,  'SymStart': 0xE0B4, 'SymEnd': 0xE0C8, 'SrcStart': None,   'ScaleRules': None,             'Attributes': SYM_ATTR_POWERLINE},
-            {'Enabled': self.args.powerlineextra,       'Name': "Powerline Extra Symbols", 'Filename': "PowerlineExtraSymbols.otf",                      'Exact': True,  'SymStart': 0xE0CA, 'SymEnd': 0xE0CA, 'SrcStart': None,   'ScaleRules': None,             'Attributes': SYM_ATTR_POWERLINE},
-            {'Enabled': self.args.powerlineextra,       'Name': "Powerline Extra Symbols", 'Filename': "PowerlineExtraSymbols.otf",                      'Exact': True,  'SymStart': 0xE0CC, 'SymEnd': 0xE0D4, 'SrcStart': None,   'ScaleRules': None,             'Attributes': SYM_ATTR_POWERLINE},
-            {'Enabled': self.args.powerlineextra,       'Name': "Powerline Extra Symbols", 'Filename': "PowerlineExtraSymbols.otf",                      'Exact': True,  'SymStart': 0x2630, 'SymEnd': 0x2630, 'SrcStart': None,   'ScaleRules': None,             'Attributes': SYM_ATTR_TRIGRAPH},
-            {'Enabled': self.args.pomicons,             'Name': "Pomicons",                'Filename': "Pomicons.otf",                                   'Exact': True,  'SymStart': 0xE000, 'SymEnd': 0xE00A, 'SrcStart': None,   'ScaleRules': None,             'Attributes': SYM_ATTR_DEFAULT},
-            {'Enabled': self.args.fontawesome,          'Name': "Font Awesome",            'Filename': "font-awesome/FontAwesome.otf",                   'Exact': True,  'SymStart': 0xF000, 'SymEnd': 0xF2E0, 'SrcStart': None,   'ScaleRules': FONTA_SCALE_LIST, 'Attributes': SYM_ATTR_FONTA},
+            {'Enabled': self.args.powerlineextra,       'Name': "Powerline Extra Symbols", 'Filename': "powerline-extra/PowerlineExtraSymbols.otf",      'Exact': True,  'SymStart': 0xE0A3, 'SymEnd': 0xE0A3, 'SrcStart': None,   'ScaleRules': None,             'Attributes': SYM_ATTR_POWERLINE},
+            {'Enabled': self.args.powerlineextra,       'Name': "Powerline Extra Symbols", 'Filename': "powerline-extra/PowerlineExtraSymbols.otf",      'Exact': True,  'SymStart': 0xE0B4, 'SymEnd': 0xE0C8, 'SrcStart': None,   'ScaleRules': None,             'Attributes': SYM_ATTR_POWERLINE},
+            {'Enabled': self.args.powerlineextra,       'Name': "Powerline Extra Symbols", 'Filename': "powerline-extra/PowerlineExtraSymbols.otf",      'Exact': True,  'SymStart': 0xE0CA, 'SymEnd': 0xE0CA, 'SrcStart': None,   'ScaleRules': None,             'Attributes': SYM_ATTR_POWERLINE},
+            {'Enabled': self.args.powerlineextra,       'Name': "Powerline Extra Symbols", 'Filename': "powerline-extra/PowerlineExtraSymbols.otf",      'Exact': True,  'SymStart': 0xE0CC, 'SymEnd': 0xE0D7, 'SrcStart': None,   'ScaleRules': None,             'Attributes': SYM_ATTR_POWERLINE},
+            {'Enabled': self.args.powerlineextra,       'Name': "Powerline Extra Symbols", 'Filename': "powerline-extra/PowerlineExtraSymbols.otf",      'Exact': True,  'SymStart': 0x2630, 'SymEnd': 0x2630, 'SrcStart': None,   'ScaleRules': None,             'Attributes': SYM_ATTR_TRIGRAPH},
+            {'Enabled': self.args.pomicons,             'Name': "Pomicons",                'Filename': "pomicons/Pomicons.otf",                          'Exact': True,  'SymStart': 0xE000, 'SymEnd': 0xE00A, 'SrcStart': None,   'ScaleRules': None,             'Attributes': SYM_ATTR_DEFAULT},
+            {'Enabled': self.args.fontawesome,          'Name': "Font Awesome",            'Filename': "font-awesome/FontAwesome.otf",                   'Exact': True,  'SymStart': 0xED00, 'SymEnd': 0xF2FF, 'SrcStart': None,   'ScaleRules': FONTA_SCALE_LIST, 'Attributes': SYM_ATTR_FONTA},
             {'Enabled': self.args.fontawesomeextension, 'Name': "Font Awesome Extension",  'Filename': "font-awesome-extension.ttf",                     'Exact': False, 'SymStart': 0xE000, 'SymEnd': 0xE0A9, 'SrcStart': 0xE200, 'ScaleRules': None,             'Attributes': SYM_ATTR_DEFAULT},  # Maximize
             {'Enabled': self.args.powersymbols,         'Name': "Power Symbols",           'Filename': "Unicode_IEC_symbol_font.otf",                    'Exact': True,  'SymStart': 0x23FB, 'SymEnd': 0x23FE, 'SrcStart': None,   'ScaleRules': None,             'Attributes': SYM_ATTR_DEFAULT},  # Power, Power On/Off, Power On, Sleep
             {'Enabled': self.args.powersymbols,         'Name': "Power Symbols",           'Filename': "Unicode_IEC_symbol_font.otf",                    'Exact': True,  'SymStart': 0x2B58, 'SymEnd': 0x2B58, 'SrcStart': None,   'ScaleRules': None,             'Attributes': SYM_ATTR_DEFAULT},  # Heavy Circle (aka Power Off)
-            {'Enabled': self.args.material,             'Name': "Material legacy",         'Filename': "materialdesignicons-webfont.ttf",                'Exact': False, 'SymStart': 0xF001, 'SymEnd': 0xF847, 'SrcStart': 0xF500, 'ScaleRules': None,             'Attributes': SYM_ATTR_DEFAULT},
+            {'Enabled': False             ,             'Name': "Material legacy",         'Filename': "materialdesign/materialdesignicons-webfont.ttf", 'Exact': False, 'SymStart': 0xF001, 'SymEnd': 0xF847, 'SrcStart': 0xF500, 'ScaleRules': None,             'Attributes': SYM_ATTR_DEFAULT},
             {'Enabled': self.args.material,             'Name': "Material",                'Filename': "materialdesign/MaterialDesignIconsDesktop.ttf",  'Exact': True,  'SymStart': 0xF0001,'SymEnd': 0xF1AF0,'SrcStart': None,   'ScaleRules': MDI_SCALE_LIST,   'Attributes': SYM_ATTR_DEFAULT},
             {'Enabled': self.args.weather,              'Name': "Weather Icons",           'Filename': "weather-icons/weathericons-regular-webfont.ttf", 'Exact': False, 'SymStart': 0xF000, 'SymEnd': 0xF0EB, 'SrcStart': 0xE300, 'ScaleRules': WEATH_SCALE_LIST, 'Attributes': SYM_ATTR_DEFAULT},
-            {'Enabled': self.args.fontlogos,            'Name': "Font Logos",              'Filename': "font-logos.ttf",                                 'Exact': True,  'SymStart': 0xF300, 'SymEnd': 0xF32F, 'SrcStart': None,   'ScaleRules': None,             'Attributes': SYM_ATTR_DEFAULT},
-            {'Enabled': self.args.octicons,             'Name': "Octicons",                'Filename': "octicons.ttf",                                   'Exact': False, 'SymStart': 0xF000, 'SymEnd': 0xF105, 'SrcStart': 0xF400, 'ScaleRules': OCTI_SCALE_LIST,  'Attributes': SYM_ATTR_DEFAULT},  # Magnifying glass
-            {'Enabled': self.args.octicons,             'Name': "Octicons",                'Filename': "octicons.ttf",                                   'Exact': True,  'SymStart': 0x2665, 'SymEnd': 0x2665, 'SrcStart': None,   'ScaleRules': OCTI_SCALE_LIST,  'Attributes': SYM_ATTR_DEFAULT},  # Heart
-            {'Enabled': self.args.octicons,             'Name': "Octicons",                'Filename': "octicons.ttf",                                   'Exact': True,  'SymStart': 0X26A1, 'SymEnd': 0X26A1, 'SrcStart': None,   'ScaleRules': OCTI_SCALE_LIST,  'Attributes': SYM_ATTR_DEFAULT},  # Zap
-            {'Enabled': self.args.octicons,             'Name': "Octicons",                'Filename': "octicons.ttf",                                   'Exact': False, 'SymStart': 0xF27C, 'SymEnd': 0xF27C, 'SrcStart': 0xF4A9, 'ScaleRules': OCTI_SCALE_LIST,  'Attributes': SYM_ATTR_DEFAULT},  # Desktop
-            {'Enabled': self.args.codicons,             'Name': "Codicons",                'Filename': "codicons/codicon.ttf",                           'Exact': True,  'SymStart': 0xEA60, 'SymEnd': 0xEBEB, 'SrcStart': None,   'ScaleRules': CODI_SCALE_LIST,  'Attributes': SYM_ATTR_DEFAULT},
+            {'Enabled': self.args.fontlogos,            'Name': "Font Logos",              'Filename': "font-logos.ttf",                                 'Exact': True,  'SymStart': 0xF300, 'SymEnd': 0xF381, 'SrcStart': None,   'ScaleRules': None,             'Attributes': SYM_ATTR_DEFAULT},
+            {'Enabled': self.args.octicons,             'Name': "Octicons",                'Filename': "octicons/octicons.ttf",                          'Exact': False, 'SymStart': 0xF000, 'SymEnd': 0xF105, 'SrcStart': 0xF400, 'ScaleRules': OCTI_SCALE_LIST,  'Attributes': SYM_ATTR_DEFAULT},  # Magnifying glass
+            {'Enabled': self.args.octicons,             'Name': "Octicons",                'Filename': "octicons/octicons.ttf",                          'Exact': True,  'SymStart': 0x2665, 'SymEnd': 0x2665, 'SrcStart': None,   'ScaleRules': OCTI_SCALE_LIST,  'Attributes': SYM_ATTR_DEFAULT},  # Heart
+            {'Enabled': self.args.octicons,             'Name': "Octicons",                'Filename': "octicons/octicons.ttf",                          'Exact': True,  'SymStart': 0X26A1, 'SymEnd': 0X26A1, 'SrcStart': None,   'ScaleRules': OCTI_SCALE_LIST,  'Attributes': SYM_ATTR_DEFAULT},  # Zap
+            {'Enabled': self.args.octicons,             'Name': "Octicons",                'Filename': "octicons/octicons.ttf",                          'Exact': False, 'SymStart': 0xF27C, 'SymEnd': 0xF306, 'SrcStart': 0xF4A9, 'ScaleRules': OCTI_SCALE_LIST,  'Attributes': SYM_ATTR_DEFAULT},
+            {'Enabled': self.args.codicons,             'Name': "Codicons",                'Filename': "codicons/codicon.ttf",                           'Exact': True,  'SymStart': 0xEA60, 'SymEnd': 0xEC1E, 'SrcStart': None,   'ScaleRules': CODI_SCALE_LIST,  'Attributes': SYM_ATTR_DEFAULT},
             {'Enabled': self.args.custom,               'Name': "Custom",                  'Filename': self.args.custom,                                 'Exact': True,  'SymStart': 0x0000, 'SymEnd': 0x0000, 'SrcStart': None,   'ScaleRules': None,             'Attributes': CUSTOM_ATTR}
         ]
 
@@ -1045,15 +1222,16 @@ class font_patcher:
         # Sometimes basic glyphs are constructed from multiple other glyphs.
         # Find out which other glyphs are also needed to keep the basic
         # glyphs intact.
-        # 0x00-0x17f is the Latin Extended-A range
-        basic_glyphs = set()
+        # 0x0000-0x017f is the Latin Extended-A range
+        # 0xfb00-0xfb06 are 'fi' and other ligatures
+        basic_glyphs = { c for c in range(0x21, 0x17f + 1) if c in self.sourceFont }
         # Collect substitution destinations
-        for glyph in range(0x21, 0x17f + 1):
+        for glyph in list(basic_glyphs) + [*range(0xfb00, 0xfb06 + 1)]:
             if not glyph in self.sourceFont:
                 continue
-            basic_glyphs.add(glyph)
             for possub in self.sourceFont[glyph].getPosSub('*'):
                 if possub[1] == 'Substitution' or possub[1] == 'Ligature':
+                    basic_glyphs.add(glyph)
                     basic_glyphs.add(self.sourceFont[possub[2]].unicode)
         basic_glyphs.discard(-1) # the .notdef glyph
         for glyph in basic_glyphs:
@@ -1070,21 +1248,43 @@ class font_patcher:
         (hhea_btb, typo_btb, win_btb, win_gap) = get_btb_metrics(self.sourceFont)
         use_typo = self.sourceFont.os2_use_typo_metrics != 0
 
-        Metric = Enum('Metric', ['HHEA', 'TYPO', 'WIN'])
+        Metric = Enum('Metric', get_metrics_names())
 
-        # We use either TYPO (1) or WIN (2) and compare with HHEA
-        # and use HHEA (0) if the fonts seems broken - no WIN, see #1056
-        our_btb = typo_btb if use_typo else win_btb
-        if our_btb == hhea_btb:
-            metrics = Metric.TYPO if use_typo else Metric.WIN # conforming font
+        if not self.args.metrics:
+            # We use either TYPO (1) or WIN (2) and compare with HHEA
+            # and use HHEA (0) if the fonts seems broken - no WIN, see #1056
+            our_btb = typo_btb if use_typo else win_btb
+            if our_btb == hhea_btb:
+                metrics = Metric.TYPO if use_typo else Metric.WIN # conforming font
+            elif abs(our_btb - hhea_btb) / our_btb < 0.03:
+                logger.info("Font vertical metrics slightly off (%.1f%%)", (our_btb - hhea_btb) / our_btb * 100.0)
+                metrics = Metric.TYPO if use_typo else Metric.WIN
+            else:
+                # Try the other metric
+                our_btb = typo_btb if not use_typo else win_btb
+                if our_btb == hhea_btb:
+                    use_typo = not use_typo
+                    logger.warning("Font vertical metrics probably wrong USE TYPO METRICS, assume opposite (i.e. %s)", repr(use_typo))
+                    self.sourceFont.os2_use_typo_metrics = 1 if use_typo else 0
+                    metrics = Metric.TYPO if use_typo else Metric.WIN
+                else:
+                    # We trust the WIN metric more, see experiments in #1056
+                    logger.warning("Font vertical metrics inconsistent (HHEA %d / TYPO %d / WIN %d), using WIN", hhea_btb, typo_btb, win_btb)
+                    our_btb = win_btb
+                    metrics = Metric.WIN
         else:
-            # We trust the WIN metric more, see experiments in #1056
-            print("{}: WARNING Font vertical metrics inconsistent (HHEA {} / TYPO {} / WIN {}), using WIN".format(projectName, hhea_btb, typo_btb, win_btb))
-            our_btb = win_btb
-            metrics = Metric.WIN
+            metrics = Metric[self.args.metrics]
+            logger.debug("Metrics in the font: HHEA %d / TYPO %d / WIN %d", hhea_btb, typo_btb, win_btb)
+            if metrics == Metric.HHEA:
+                our_btb = hhea_btb
+            elif metrics == Metric.TYPO:
+                our_btb = typo_btb
+            else:
+                our_btb = win_btb
+            logger.info("Manually selected metrics: %s (%d)", self.args.metrics, our_btb)
 
         # print("FINI hhea {} typo {} win {} use {}     {}      {}".format(hhea_btb, typo_btb, win_btb, use_typo, our_btb != hhea_btb, self.sourceFont.fontname))
-
+        self.font_dim = {'xmin': 0, 'ymin': 0, 'xmax': 0, 'ymax': 0, 'width' : 0, 'height': 0, 'iconheight': 0, 'ypadding': 0}
         self.font_dim = {'xmin': 0, 'ymin': 0, 'xmax': 0, 'ymax': 0, 'width' : 0, 'height': 0, 'em': 0}
         self.font_dim['em'] = self.sourceFont.em
 
@@ -1098,6 +1298,7 @@ class font_patcher:
             self.font_dim['ymin'] = -self.sourceFont.os2_windescent - half_gap(win_gap, False)
             self.font_dim['ymax'] = self.sourceFont.os2_winascent + half_gap(win_gap, True)
         else:
+            logger.debug("Metrics is strange")
             pass # Will fail the metrics check some line later
 
         # Calculate font height
@@ -1105,17 +1306,29 @@ class font_patcher:
         if self.font_dim['height'] == 0:
             # This can only happen if the input font is empty
             # Assume we are using our prepared templates
+            self.symbolsonly = True
             self.font_dim = {
-                'xmin'  : 0,
-                'ymin'  : -self.sourceFont.descent,
-                'xmax'  : self.sourceFont.em,
-                'ymax'  : self.sourceFont.ascent,
-                'width' : self.sourceFont.em,
-                'height': self.sourceFont.descent + self.sourceFont.ascent,
+                'xmin'      : 0,
+                'ymin'      : -self.sourceFont.descent,
+                'xmax'      : self.sourceFont.em,
+                'ymax'      : self.sourceFont.ascent,
+                'width'     : self.sourceFont.em,
+                'height'    : self.sourceFont.descent + self.sourceFont.ascent,
+                'iconheight': self.sourceFont.descent + self.sourceFont.ascent,
+                'ypadding'  : 0,
             }
             our_btb = self.sourceFont.descent + self.sourceFont.ascent
-        elif self.font_dim['height'] < 0:
-            sys.exit("{}: Can not detect sane font height".format(projectName))
+        if self.font_dim['height'] <= 0:
+            logger.critical("Can not detect sane font height")
+            sys.exit(1)
+
+        self.font_dim['iconheight'] = self.font_dim['height']
+        if self.args.single and self.sourceFont.capHeight > 0:
+            # Limit the icon height on monospaced fonts because very slender and tall icons render
+            # excessivly tall otherwise. We ignore that effect for the other variants because it
+            # does not look so much out of place there.
+            # Icons can be bigger than the letter capitals, but not the whole cell:
+            self.font_dim['iconheight'] = (self.sourceFont.capHeight * 2 + self.font_dim['height']) / 3
 
         # Make all metrics equal
         self.sourceFont.os2_typolinegap = 0
@@ -1129,18 +1342,20 @@ class font_patcher:
         self.sourceFont.os2_use_typo_metrics = 1
         (check_hhea_btb, check_typo_btb, check_win_btb, _) = get_btb_metrics(self.sourceFont)
         if check_hhea_btb != check_typo_btb or check_typo_btb != check_win_btb or check_win_btb != our_btb:
-            sys.exit("{}: Error in baseline to baseline code detected".format(projectName))
+            logger.critical("Error in baseline to baseline code detected")
+            sys.exit(1)
 
         # Step 2
         # Find the biggest char width and advance width
         # 0x00-0x17f is the Latin Extended-A range
-        warned1 = self.args.quiet or self.args.nonmono # Do not warn if quiet or proportional target
+        warned1 = self.args.nonmono # Do not warn if proportional target
         warned2 = warned1
         for glyph in range(0x21, 0x17f):
             if glyph in range(0x7F, 0xBF) or glyph in [
                     0x132, 0x133, # IJ, ij (in Overpass Mono)
                     0x022, 0x027, 0x060, # Single and double quotes in Inconsolata LGC
                     0x0D0, 0x10F, 0x110, 0x111, 0x127, 0x13E, 0x140, 0x165, # Eth and others with stroke or caron in RobotoMono
+                    0x149, # napostrophe in DaddyTimeMono
                     0x02D, # hyphen for Monofur
                     ]:
                 continue # ignore special characters like '1/4' etc and some specifics
@@ -1152,21 +1367,29 @@ class font_patcher:
             if self.font_dim['width'] < self.sourceFont[glyph].width:
                 self.font_dim['width'] = self.sourceFont[glyph].width
                 if not warned1 and glyph > 0x7a: # NOT 'basic' glyph, which includes a-zA-Z
-                    print("Warning: Extended glyphs wider than basic glyphs, results might be useless\n  {}".format(
-                        report_advance_widths(self.sourceFont)))
+                    logger.debug("Extended glyphs wider than basic glyphs, results might be useless")
+                    logger.debug("%s", report_advance_widths(self.sourceFont))
                     warned1 = True
                 # print("New MAXWIDTH-A {:X} {} -> {} {}".format(glyph, self.sourceFont[glyph].width, self.font_dim['width'], xmax))
             if xmax > self.font_dim['xmax']:
                 self.font_dim['xmax'] = xmax
                 if not warned2 and glyph > 0x7a: # NOT 'basic' glyph, which includes a-zA-Z
-                    print("Info: Extended glyphs wider bounding box than basic glyphs")
+                    logger.debug("Extended glyphs wider bounding box than basic glyphs")
                     warned2 = True
                 # print("New MAXWIDTH-B {:X} {} -> {} {}".format(glyph, self.sourceFont[glyph].width, self.font_dim['width'], xmax))
         if self.font_dim['width'] < self.font_dim['xmax']:
-            if not self.args.quiet:
-                print("Warning: Font has negative right side bearing in extended glyphs")
+            logger.debug("Font has negative right side bearing in extended glyphs")
             self.font_dim['xmax'] = self.font_dim['width'] # In fact 'xmax' is never used
-        # print("FINAL", self.font_dim)
+        if self.font_dim['width'] <= 0:
+            logger.critical("Can not detect sane font width")
+            sys.exit(1)
+        logger.debug("Final font cell dimensions %d w x %d h%s",
+            self.font_dim['width'], self.font_dim['height'],
+            ' (with icon cell {} h)'.format(int(self.font_dim['iconheight'])) if self.font_dim['iconheight'] != self.font_dim['height'] else '')
+
+        self.xavgwidth.append(self.args.xavgwidth)
+        if isinstance(self.xavgwidth[-1], int) and self.xavgwidth[-1] == 0:
+            self.xavgwidth[-1] = get_old_average_x_width(self.sourceFont)
 
 
     def get_target_width(self, stretch):
@@ -1190,8 +1413,8 @@ class font_patcher:
 
         # font_dim['height'] represents total line height, keep our symbols sized based upon font's em
         # Use the font_dim['height'] only for explicit 'y' scaling (not 'pa')
-        # FOR SARASA: https://github.com/laishulu/Sarasa-Term-SC-Nerd/issues/1#issuecomment-663814468
-        target_height = self.font_dim['em']
+        target_height = self.font_dim['height'] if '^' in stretch else self.font_dim['iconheight']
+        target_height *= 1.0 - self.font_dim['ypadding']
         scale_ratio_y = target_height / sym_dim['height']
 
         if 'pa' in stretch:
@@ -1263,7 +1486,7 @@ class font_patcher:
                 if sym_glyph.altuni:
                     possible_codes += [ v for v, s, r in sym_glyph.altuni if v > currentSourceFontGlyph ]
                 if len(possible_codes) == 0:
-                    print("  Can not determine codepoint of {:X}. Skipping...".format(sym_glyph.unicode))
+                    logger.warning("Can not determine codepoint of %X. Skipping...", sym_glyph.unicode)
                     continue
                 currentSourceFontGlyph = min(possible_codes)
             else:
@@ -1275,6 +1498,9 @@ class font_patcher:
             # if currentSourceFontGlyph != 0xe7bd:
             #     continue
 
+            ypadding = sym_attr['params'].get('ypadding')
+            self.font_dim['ypadding'] = ypadding or 0.0
+
             if not self.args.quiet:
                 if self.args.progressbars:
                     update_progress(round(float(index + 1) / glyphSetLength, 2))
@@ -1284,11 +1510,11 @@ class font_patcher:
                     sys.stdout.flush()
 
             # check if a glyph already exists in this location
-            if careful or 'careful' in sym_attr['params'] or currentSourceFontGlyph in self.essential:
+            do_careful = sym_attr['params'].get('careful', careful) # params take precedence
+            if do_careful or currentSourceFontGlyph in self.essential:
                 if currentSourceFontGlyph in self.sourceFont:
-                    if not self.args.quiet:
-                        careful_type = 'essential' if currentSourceFontGlyph in self.essential else 'existing'
-                        print("  Found {} Glyph at {:X}. Skipping...".format(careful_type, currentSourceFontGlyph))
+                    careful_type = 'essential' if currentSourceFontGlyph in self.essential else 'existing'
+                    logger.debug("Found %s Glyph at %X. Skipping...", careful_type, currentSourceFontGlyph)
                     # We don't want to touch anything so move to next Glyph
                     continue
             else:
@@ -1297,14 +1523,27 @@ class font_patcher:
                 if currentSourceFontGlyph in self.sourceFont:
                     self.sourceFont[currentSourceFontGlyph].removePosSub("*")
 
+            stretch = sym_attr['stretch']
             dont_copy = sym_attr['params'].get('dont_copy')
 
             if dont_copy:
                 # Just prepare scaling of existing glyphs
-                glyph_scale_data = self.get_glyph_scale(sym_glyph.encoding, scaleRules, self.sourceFont, currentSourceFontGlyph) if scaleRules is not None else None
+                glyph_scale_data = self.get_glyph_scale(sym_glyph.encoding, scaleRules, stretch, self.sourceFont, currentSourceFontGlyph) if scaleRules is not None else None
             else:
+                # Break apart multiple unicodes linking to one glyph
+                if currentSourceFontGlyph in self.sourceFont:
+                    altuni = self.sourceFont[currentSourceFontGlyph].altuni
+                    if altuni:
+                        codes = { v for v, s, r in altuni if v >= 0 }
+                        codes.add(self.sourceFont[currentSourceFontGlyph].unicode)
+                        codes.remove(currentSourceFontGlyph)
+                        codes = [ "{:04X}".format(c) for c in sorted(list(codes)) ]
+                        logger.debug("Removing alternate unicode on %X (%s)", currentSourceFontGlyph, ' '.join(codes));
+                        self.sourceFont[currentSourceFontGlyph].altuni = None
+                        self.sourceFont.encoding = 'UnicodeFull' # Rebuild encoding table (needed after altuni changes)
+
                 # This will destroy any content currently in currentSourceFontGlyph, so do it first
-                glyph_scale_data = self.get_glyph_scale(sym_glyph.encoding, scaleRules, symbolFont, currentSourceFontGlyph) if scaleRules is not None else None
+                glyph_scale_data = self.get_glyph_scale(sym_glyph.encoding, scaleRules, stretch, symbolFont, currentSourceFontGlyph) if scaleRules is not None else None
 
                 # Select and copy symbol from its encoding point
                 # We need to do this select after the careful check, this way we don't
@@ -1323,15 +1562,18 @@ class font_patcher:
             if glyph_scale_data is not None:
                 if glyph_scale_data[1] is not None:
                     sym_dim = glyph_scale_data[1] # Use combined bounding box
-                    (scale_ratio_x, scale_ratio_y) = self.get_scale_factors(sym_dim, sym_attr['stretch'])
+                    (scale_ratio_x, scale_ratio_y) = self.get_scale_factors(sym_dim, stretch)
                 else:
                     # This is roughly alike get_scale_factors(glyph_scale_data[1], 'pa')
                     # Except we do not have glyph_scale_data[1] always...
                     (scale_ratio_x, scale_ratio_y) = (glyph_scale_data[0], glyph_scale_data[0])
             else:
-                (scale_ratio_x, scale_ratio_y) = self.get_scale_factors(sym_dim, sym_attr['stretch'])
+                (scale_ratio_x, scale_ratio_y) = self.get_scale_factors(sym_dim, stretch)
 
             overlap = sym_attr['params'].get('overlap')
+            if overlap and ypadding:
+                logger.critical("Conflicting params: overlap and ypadding")
+                sys.exit(1)
             if overlap:
                 scale_ratio_x *= 1.0 + (self.font_dim['width'] / (sym_dim['width'] * scale_ratio_x)) * overlap
                 y_overlap = min(0.01, overlap) # never aggressive vertical overlap
@@ -1381,7 +1623,7 @@ class font_patcher:
                     x_align_distance += (self.font_dim['width'] / 2) - (sym_dim['width'] / 2)
                 elif sym_attr['align'] == 'r':
                     # Right align
-                    x_align_distance += self.font_dim['width'] * self.get_target_width(sym_attr['stretch']) - sym_dim['width']
+                    x_align_distance += self.font_dim['width'] * self.get_target_width(stretch) - sym_dim['width']
                 # If symbol glyph is wider than target font cell, just left-align
                 x_align_distance = max(self.font_dim['xmin'] - sym_dim['xmin'], x_align_distance)
 
@@ -1394,7 +1636,7 @@ class font_patcher:
                         x_align_distance -= overlap_width / 2
                 elif sym_attr['align'] == 'r':
                     # Check and correct overlap; it can go wrong if we have a xy-ratio limit
-                    target_xmax = (self.font_dim['xmin'] + self.font_dim['width']) * self.get_target_width(sym_attr['stretch'])
+                    target_xmax = (self.font_dim['xmin'] + self.font_dim['width']) * self.get_target_width(stretch)
                     target_xmax += overlap_width
                     glyph_xmax = sym_dim['xmax'] + x_align_distance
                     correction = target_xmax - glyph_xmax
@@ -1436,8 +1678,8 @@ class font_patcher:
             if self.args.single:
                 (xmin, _, xmax, _) = self.sourceFont[currentSourceFontGlyph].boundingBox()
                 if int(xmax - xmin) > self.font_dim['width'] * (1 + (overlap or 0)):
-                    print("\n  Warning: Scaled glyph U+{:X} wider than one monospace width ({} / {} (overlap {}))".format(
-                        currentSourceFontGlyph, int(xmax - xmin), self.font_dim['width'], overlap))
+                    logger.warning("Scaled glyph %X wider than one monospace width (%d / %d (overlap %s))",
+                        currentSourceFontGlyph, int(xmax - xmin), self.font_dim['width'], repr(overlap))
 
         # end for
 
@@ -1490,7 +1732,7 @@ class font_patcher:
         except:
             pass
 
-    def prepareScaleRules(self, scaleRules, symbolFont, destGlyph):
+    def prepareScaleRules(self, scaleRules, stretch, symbolFont, destGlyph):
         """ Prepare raw ScaleRules data for use """
         # The scaleRules is/will be a dict with these (possible) entries:
         # 'ScaleGroups': List of ((lists of glyph codes) or (ranges of glyph codes)) that shall be scaled
@@ -1524,7 +1766,7 @@ class font_patcher:
             scaleRules['ScaleGroups'] = []
         for group in scaleRules['ScaleGroups']:
             sym_dim = get_multiglyph_boundingBox([ symbolFont[g] if g in symbolFont else None for g in group ], destGlyph)
-            scale = self.get_scale_factors(sym_dim, 'pa')[0]
+            scale = self.get_scale_factors(sym_dim, stretch)[0]
             scaleRules['scales'].append(scale)
             scaleRules['bbdims'].append(sym_dim)
 
@@ -1543,7 +1785,7 @@ class font_patcher:
                 else:
                     group_list.append(i)
             sym_dim = get_glyph_dimensions(symbolFont[scaleRules['ScaleGlyph']])
-            scale = self.get_scale_factors(sym_dim, 'pa')[0]
+            scale = self.get_scale_factors(sym_dim, stretch)[0]
             scaleRules['ScaleGroups'].append(group_list)
             scaleRules['scales'].append(scale)
             if plus:
@@ -1551,13 +1793,13 @@ class font_patcher:
             else:
                 scaleRules['bbdims'].append(None) # The 'old' style keeps just the scale, not the positioning
 
-    def get_glyph_scale(self, symbol_unicode, scaleRules, symbolFont, dest_unicode):
+    def get_glyph_scale(self, symbol_unicode, scaleRules, stretch, symbolFont, dest_unicode):
         """ Determines whether or not to use scaled glyphs for glyph in passed symbol_unicode """
         # Potentially destorys the contents of self.sourceFont[dest_unicode]
         if not 'scales' in scaleRules:
             if not dest_unicode in self.sourceFont:
                 self.sourceFont.createChar(dest_unicode)
-            self.prepareScaleRules(scaleRules, symbolFont, self.sourceFont[dest_unicode])
+            self.prepareScaleRules(scaleRules, stretch, symbolFont, self.sourceFont[dest_unicode])
         for glyph_list, scale, box in zip(scaleRules['ScaleGroups'], scaleRules['scales'], scaleRules['bbdims']):
             for e in glyph_list:
                 if isinstance(e, range):
@@ -1578,7 +1820,7 @@ def half_gap(gap, top):
     gap_top = int(gap / 2)
     gap_bottom = gap - gap_top
     if top:
-        print("Redistributing line gap of {} ({} top and {} bottom)".format(gap, gap_top, gap_bottom))
+        logger.info("Redistributing line gap of %d (%d top and %d bottom)", gap, gap_top, gap_bottom)
         return gap_top
     return gap_bottom
 
@@ -1703,8 +1945,8 @@ def check_fontforge_min_version():
 
     # versions tested: 20150612, 20150824
     if actualVersion < minimumVersion:
-        sys.stderr.write("{}: You seem to be using an unsupported (old) version of fontforge: {}\n".format(projectName, actualVersion))
-        sys.stderr.write("{}: Please use at least version: {}\n".format(projectName, minimumVersion))
+        logger.critical("You seem to be using an unsupported (old) version of fontforge: %d", actualVersion)
+        logger.critical("Please use at least version: %d", minimumVersion)
         sys.exit(1)
 
 def check_version_with_git(version):
@@ -1736,6 +1978,7 @@ def check_version_with_git(version):
     return False
 
 def setup_arguments():
+    """ Parse the command line parameters and load the config file if needed """
     parser = argparse.ArgumentParser(
         description=(
             'Nerd Fonts Font Patcher: patches a given font with programming and development related glyphs\n\n'
@@ -1749,47 +1992,88 @@ def setup_arguments():
     # optional arguments
     parser.add_argument('font',                                      help='The path to the font to patch (e.g., Inconsolata.otf)')
     parser.add_argument('-v', '--version',                           action='version',        version=projectName + ": %(prog)s (" + version + ")")
-    parser.add_argument('-s', '--mono', '--use-single-width-glyphs', dest='single',           default=False, action='count',      help='Whether to generate the glyphs as single-width not double-width (default is double-width)')
-    parser.add_argument('-l', '--adjust-line-height',                dest='adjustLineHeight', default=False, action='store_true', help='Whether to adjust line heights (attempt to center powerline separators more evenly)')
-    parser.add_argument('-q', '--quiet', '--shutup',                 dest='quiet',            default=False, action='store_true', help='Do not generate verbose output')
-    parser.add_argument('-w', '--windows',                           dest='windows',          default=False, action='store_true', help='Limit the internal font name to 31 characters (for Windows compatibility)')
-    parser.add_argument('-c', '--complete',                          dest='complete',         default=False, action='store_true', help='Add all available Glyphs')
+    parser.add_argument('-s', '--mono', '--use-single-width-glyphs', dest='single',           default=False, action='count',      help='Whether to generate the glyphs as single-width not double-width (default is double-width) (Nerd Font Mono)')
+    parser.add_argument('--variable-width-glyphs',                   dest='nonmono',          default=False, action='store_true', help='Do not adjust advance width (no "overhang") (Nerd Font Propo)')
+    parser.add_argument('--debug',                                   dest='debugmode',        default=0,     type=int, nargs='?', help='Verbose mode (optional: 1=just to file; 2*=just to terminal; 3=display and file)', const=2, choices=range(0, 3 + 1))
+    parser.add_argument('-q', '--quiet',                             dest='quiet',            default=False, action='store_true', help='Do not generate verbose output')
     parser.add_argument('--careful',                                 dest='careful',          default=False, action='store_true', help='Do not overwrite existing glyphs if detected')
-    parser.add_argument('--removeligs', '--removeligatures',         dest='removeligatures',  default=False, action='store_true', help='Removes ligatures specificed in JSON configuration file')
-    parser.add_argument('--postprocess',                             dest='postprocess',      default=False, type=str, nargs='?', help='Specify a Script for Post Processing')
-    parser.add_argument('--configfile',                              dest='configfile',       default=False, type=str, nargs='?', help='Specify a file path for JSON configuration file (see sample: src/config.sample.json)')
-    parser.add_argument('--custom',                                  dest='custom',           default=False, type=str, nargs='?', help='Specify a custom symbol font. All new glyphs will be copied, with no scaling applied.')
-    parser.add_argument('-ext', '--extension',                       dest='extension',        default="",    type=str, nargs='?', help='Change font file type to create (e.g., ttf, otf)')
-    parser.add_argument('-out', '--outputdir',                       dest='outputdir',        default=".",   type=str, nargs='?', help='The directory to output the patched font file to')
-    parser.add_argument('--glyphdir',                                dest='glyphdir',         default=__dir__ + "/src/glyphs/", type=str, nargs='?', help='Path to glyphs to be used for patching')
-    parser.add_argument('--makegroups',                              dest='makegroups',       default=False, action='store_true', help='Use alternative method to name patched fonts (experimental)')
-    parser.add_argument('--variable-width-glyphs',                   dest='nonmono',          default=False, action='store_true', help='Do not adjust advance width (no "overhang")')
+    parser.add_argument('-ext', '--extension',                       dest='extension',        default="",    type=str,            help='Change font file type to create (e.g., ttf, otf)')
+    parser.add_argument('-out', '--outputdir',                       dest='outputdir',        default=".",   type=str,            help='The directory to output the patched font file to')
+    parser.add_argument('--makegroups',                              dest='makegroups',       default=1,     type=int, nargs='?', help='Use alternative method to name patched fonts (default=1)', const=1, choices=range(-1, 6 + 1))
+    # --makegroup has an additional undocumented numeric specifier. '--makegroup' is in fact '--makegroup 1'.
+    # Original font name: Hugo Sans Mono ExtraCondensed Light Italic
+    #                                                              NF  Fam agg.
+    # -1  no renaming at all (keep old names and versions etc)     --- --- ---
+    #  0  turned off, use old naming scheme                        [-] [-] [-]
+    #  1  HugoSansMono Nerd Font ExtraCondensed Light Italic       [ ] [ ] [ ]
+    #  2  HugoSansMono Nerd Font ExtCn Light Italic                [ ] [X] [ ]
+    #  3  HugoSansMono Nerd Font XCn Lt It                         [ ] [X] [X]
+    #  4  HugoSansMono NF ExtraCondensed Light Italic              [X] [ ] [ ]
+    #  5  HugoSansMono NF ExtCn Light Italic                       [X] [X] [ ]
+    #  6  HugoSansMono NF XCn Lt It                                [X] [X] [X]
 
-    # progress bar arguments - https://stackoverflow.com/questions/15008758/parsing-boolean-values-with-argparse
-    progressbars_group_parser = parser.add_mutually_exclusive_group(required=False)
-    progressbars_group_parser.add_argument('--progressbars',         dest='progressbars',     action='store_true',                help='Show percentage completion progress bars per Glyph Set')
-    progressbars_group_parser.add_argument('--no-progressbars',      dest='progressbars',     action='store_false',               help='Don\'t show percentage completion progress bars per Glyph Set')
-    parser.set_defaults(progressbars=True)
-    parser.add_argument('--also-windows',                            dest='alsowindows',      default=False, action='store_true', help='Create two fonts, the normal and the --windows version')
-
-    # symbol fonts to include arguments
     sym_font_group = parser.add_argument_group('Symbol Fonts')
-    sym_font_group.add_argument('--fontawesome',                                dest='fontawesome',          default=False, action='store_true', help='Add Font Awesome Glyphs (http://fontawesome.io/)')
-    sym_font_group.add_argument('--fontawesomeextension',                       dest='fontawesomeextension', default=False, action='store_true', help='Add Font Awesome Extension Glyphs (https://andrelzgava.github.io/font-awesome-extension/)')
-    sym_font_group.add_argument('--fontlogos', '--fontlinux',                   dest='fontlogos',            default=False, action='store_true', help='Add Font Logos Glyphs (https://github.com/Lukas-W/font-logos)')
-    sym_font_group.add_argument('--octicons',                                   dest='octicons',             default=False, action='store_true', help='Add Octicons Glyphs (https://octicons.github.com)')
+    sym_font_group.add_argument('-c', '--complete',                             dest='complete',             default=False, action='store_true', help='Add all available Glyphs')
     sym_font_group.add_argument('--codicons',                                   dest='codicons',             default=False, action='store_true', help='Add Codicons Glyphs (https://github.com/microsoft/vscode-codicons)')
+    sym_font_group.add_argument('--fontawesome',                                dest='fontawesome',          default=False, action='store_true', help='Add Font Awesome Glyphs (http://fontawesome.io/)')
+    sym_font_group.add_argument('--fontawesomeext',                             dest='fontawesomeextension', default=False, action='store_true', help='Add Font Awesome Extension Glyphs (https://andrelzgava.github.io/font-awesome-extension/)')
+    sym_font_group.add_argument('--fontlogos',                                  dest='fontlogos',            default=False, action='store_true', help='Add Font Logos Glyphs (https://github.com/Lukas-W/font-logos)')
+    sym_font_group.add_argument('--material', '--mdi',                          dest='material',             default=False, action='store_true', help='Add Material Design Icons (https://github.com/templarian/MaterialDesign)')
+    sym_font_group.add_argument('--octicons',                                   dest='octicons',             default=False, action='store_true', help='Add Octicons Glyphs (https://octicons.github.com)')
     sym_font_group.add_argument('--powersymbols',                               dest='powersymbols',         default=False, action='store_true', help='Add IEC Power Symbols (https://unicodepowersymbol.com/)')
     sym_font_group.add_argument('--pomicons',                                   dest='pomicons',             default=False, action='store_true', help='Add Pomicon Glyphs (https://github.com/gabrielelana/pomicons)')
     sym_font_group.add_argument('--powerline',                                  dest='powerline',            default=False, action='store_true', help='Add Powerline Glyphs')
-    sym_font_group.add_argument('--powerlineextra',                             dest='powerlineextra',       default=False, action='store_true', help='Add Powerline Glyphs (https://github.com/ryanoasis/powerline-extra-symbols)')
-    sym_font_group.add_argument('--material', '--materialdesignicons', '--mdi', dest='material',             default=False, action='store_true', help='Add Material Design Icons (https://github.com/templarian/MaterialDesign)')
-    sym_font_group.add_argument('--weather', '--weathericons',                  dest='weather',              default=False, action='store_true', help='Add Weather Icons (https://github.com/erikflowers/weather-icons)')
+    sym_font_group.add_argument('--powerlineextra',                             dest='powerlineextra',       default=False, action='store_true', help='Add Powerline Extra Glyphs (https://github.com/ryanoasis/powerline-extra-symbols)')
+    sym_font_group.add_argument('--weather',                                    dest='weather',              default=False, action='store_true', help='Add Weather Icons (https://github.com/erikflowers/weather-icons)')
+
+    expert_group = parser.add_argument_group('Expert Options')
+    expert_group.add_argument('--boxdrawing',                              dest='forcebox',         default=False, action='store_true', help='Force patching in (over existing) box drawing glyphs')
+    expert_group.add_argument('--configfile',                              dest='configfile',       default=False, type=str,            help='Specify a file path for configuration file (see sample: src/config.sample.cfg)')
+    expert_group.add_argument('--custom',                                  dest='custom',           default=False, type=str,            help='Specify a custom symbol font, all glyphs will be copied; absolute path suggested')
+
+    expert_group.add_argument('--dry',                                     dest='dry_run',          default=False, action='store_true', help='Do neither patch nor store the font, to check naming')
+    expert_group.add_argument('--glyphdir',                                dest='glyphdir',         default=__dir__ + "/src/glyphs/", type=str, help='Path to glyphs to be used for patching')
+    expert_group.add_argument('--has-no-italic',                           dest='noitalic',         default=False, action='store_true', help='Font family does not have Italic (but Oblique), to help create correct RIBBI set')
+    expert_group.add_argument('-l', '--adjust-line-height',                dest='adjustLineHeight', default=False, action='store_true', help='Whether to adjust line heights (attempt to center powerline separators more evenly)')
+    expert_group.add_argument('--metrics',                                 dest='metrics',          default=None, choices=get_metrics_names(), help='Select vertical metrics source (for problematic cases)')
+    expert_group.add_argument('--name',                                    dest='force_name',       default=None, type=str,             help='Specify naming source (\'full\', \'postscript\', \'filename\', or concrete free name-string)')
+    expert_group.add_argument('--postprocess',                             dest='postprocess',      default=False, type=str,            help='Specify a Script for Post Processing')
+    progressbars_group_parser = expert_group.add_mutually_exclusive_group(required=False)
+    expert_group.add_argument('--removeligs', '--removeligatures',         dest='removeligatures',  default=False, action='store_true', help='Removes ligatures specificed in configuration file (needs --configfile)')
+    expert_group.add_argument('--xavgcharwidth',                           dest='xavgwidth',        default=None,  type=int, nargs='?', help='Adjust xAvgCharWidth (optional: concrete value)', const=True)
+    # --xavgcharwidth for compatibility with old applications like notepad and non-latin fonts
+    # Possible values with examples:
+    # <none>  - copy from sourcefont (default)
+    # 0       - calculate from font according to OS/2-version-2
+    # 500     - set to 500
+
+    # progress bar arguments - https://stackoverflow.com/questions/15008758/parsing-boolean-values-with-argparse
+    progressbars_group_parser.add_argument('--progressbars',         dest='progressbars',     action='store_true',                help='Show percentage completion progress bars per Glyph Set (default)')
+    progressbars_group_parser.add_argument('--no-progressbars',      dest='progressbars',     action='store_false',               help='Don\'t show percentage completion progress bars per Glyph Set')
+    expert_group.set_defaults(progressbars=True)
 
     args = parser.parse_args()
+    setup_global_logger(args)
 
-    if args.makegroups and not FontnameParserOK:
-        sys.exit("{}: FontnameParser module missing (bin/scripts/name_parser/Fontname*), can not --makegroups".format(projectName))
+    # if we have a config file: fetch commandline arguments from there and process again with all arguments
+    config = configparser.ConfigParser(empty_lines_in_values=False, allow_no_value=True)
+    if args.configfile:
+        if not os.path.isfile(args.configfile):
+            logger.critical("Configfile does not exist: %s", args.configfile)
+            sys.exit(1)
+        if not os.access(args.configfile, os.R_OK):
+            logger.critical("Can not open configfile for reading: %s", args.configfile)
+            sys.exit(1)
+        config.read(args.configfile)
+        extraflags = config.get("Config", "commandline", fallback='')
+        if len(extraflags):
+            logger.info("Adding config commandline options: %s", extraflags)
+            extraflags += ' ' + args.font # Need to re-add the mandatory argument
+            args = parser.parse_args(extraflags.split(), args)
+
+    if args.makegroups > 0 and not FontnameParserOK:
+        logger.critical("FontnameParser module missing (bin/scripts/name_parser/Fontname*), specify --makegroups 0")
+        sys.exit(1)
 
     # if you add a new font, set it to True here inside the if condition
     if args.complete:
@@ -1822,24 +2106,23 @@ def setup_arguments():
                 font_complete = False
         args.complete = font_complete
 
-    if args.alsowindows:
-        args.windows = False
-
     if args.nonmono and args.single:
-        print("Warning: Specified contradicting --variable-width-glyphs and --use-single-width-glyph. Ignoring --variable-width-glyphs.")
+        logger.warning("Specified contradicting --variable-width-glyphs and --use-single-width-glyph. Ignoring --variable-width-glyphs.")
         args.nonmono = False
 
     make_sure_path_exists(args.outputdir)
     if not os.path.isfile(args.font):
-        sys.exit("{}: Font file does not exist: {}".format(projectName, args.font))
+        logger.critical("Font file does not exist: %s", args.font)
+        sys.exit(1)
     if not os.access(args.font, os.R_OK):
-        sys.exit("{}: Can not open font file for reading: {}".format(projectName, args.font))
+        logger.critical("Can not open font file for reading: %s", args.font)
+        sys.exit(1)
     is_ttc = len(fontforge.fontsInFile(args.font)) > 1
     try:
         source_font_test = TableHEADWriter(args.font)
         args.is_variable = source_font_test.find_table([b'avar', b'cvar', b'fvar', b'gvarb', b'HVAR', b'MVAR', b'VVAR'], 0)
         if args.is_variable:
-            print("  Warning: Source font is a variable open type font (VF), opening might fail...")
+            logger.warning("Source font is a variable open type font (VF), opening might fail...")
     except:
         args.is_variable = False
     finally:
@@ -1852,51 +2135,95 @@ def setup_arguments():
         args.extension = os.path.splitext(args.font)[1]
     else:
         args.extension = '.' + args.extension
-    if re.match("\.ttc$", args.extension, re.IGNORECASE):
+    if re.match(r'\.ttc$', args.extension, re.IGNORECASE):
         if not is_ttc:
-            sys.exit(projectName + ": Can not create True Type Collections from single font files")
+            logger.critical("Can not create True Type Collections from single font files")
+            sys.exit(1)
     else:
         if is_ttc:
-            sys.exit(projectName + ": Can not create single font files from True Type Collections")
+            logger.critical("Can not create single font files from True Type Collections")
+            sys.exit(1)
 
-    return args
+    if isinstance(args.xavgwidth, int) and not isinstance(args.xavgwidth, bool):
+        if args.xavgwidth < 0:
+            logger.critical("--xavgcharwidth takes no negative numbers")
+            sys.exit(2)
+        if args.xavgwidth > 16384:
+            logger.critical("--xavgcharwidth takes only numbers up to 16384")
+            sys.exit(2)
 
+    return (args, config)
+
+def setup_global_logger(args):
+    """ Set up the logger and take options into account """
+    global logger
+    logger = logging.getLogger(os.path.basename(args.font))
+    logger.setLevel(logging.DEBUG)
+    log_to_file = (args.debugmode & 1 == 1)
+    if log_to_file:
+        try:
+            f_handler = logging.FileHandler('font-patcher-log.txt')
+            f_handler.setFormatter(logging.Formatter('%(levelname)s: %(name)s %(message)s'))
+            logger.addHandler(f_handler)
+        except:
+            log_to_file = False
+        logger.debug(allversions)
+        logger.debug("Options %s", repr(sys.argv[1:]))
+    c_handler = logging.StreamHandler(stream=sys.stdout)
+    c_handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
+    if not (args.debugmode & 2 == 2):
+        c_handler.setLevel(logging.INFO)
+    logger.addHandler(c_handler)
+    if (args.debugmode & 1 == 1) and not log_to_file:
+        logger.info("Can not write logfile, disabling")
 
 def main():
+    global logger
+    logger = logging.getLogger("start") # Use start logger until we can set up something sane
+    s_handler = logging.StreamHandler(stream=sys.stdout)
+    s_handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
+    logger.addHandler(s_handler)
+
     global version
     git_version = check_version_with_git(version)
-    print("{} Patcher v{} ({}) (ff {}) executing".format(
-        projectName, git_version if git_version else version, script_version, fontforge.version()))
+    global allversions
+    allversions = "Patcher v{} ({}) (ff {})".format(
+        git_version if git_version else version, script_version, fontforge.version())
+    print("{} {}".format(projectName, allversions))
     if git_version:
         version = git_version
     check_fontforge_min_version()
-    args = setup_arguments()
-    patcher = font_patcher(args)
+    (args, conf) = setup_arguments()
+    logger.debug("Naming mode %d", args.makegroups)
+
+    patcher = font_patcher(args, conf)
 
     sourceFonts = []
     all_fonts = fontforge.fontsInFile(args.font)
+    if not all_fonts:
+        if re.match(".*\\.woff2?", args.font, re.I):
+            all_fonts=[ "" ]
+        else:
+            logger.critical("Can not find any fonts in '%s'", args.font)
+            sys.exit(1)
     for i, subfont in enumerate(all_fonts):
         if len(all_fonts) > 1:
-          print("\n{}: Processing {} ({}/{})".format(projectName, subfont, i + 1, len(all_fonts)))
+          print("\n")
+          logger.info("Processing %s (%d/%d)", subfont, i + 1, len(all_fonts))
         try:
             sourceFonts.append(fontforge.open("{}({})".format(args.font, subfont), 1)) # 1 = ("fstypepermitted",))
         except Exception:
-            sys.exit("{}: Can not open font '{}', try to open with fontforge interactively to get more information".format(
-                projectName, subfont))
+            logger.critical("Can not open font '%s', try to open with fontforge interactively to get more information",
+                subfont)
+            sys.exit(1)
 
+        patcher.setup_name_backup(sourceFonts[-1])
         patcher.patch(sourceFonts[-1])
 
     print("Done with Patch Sets, generating font...")
     for f in sourceFonts:
         patcher.setup_font_names(f)
     patcher.generate(sourceFonts)
-
-    # This mainly helps to improve CI runtime
-    if patcher.args.alsowindows:
-        patcher.args.windows = True
-        for f in sourceFonts:
-            patcher.setup_font_names(f)
-        patcher.generate(sourceFonts)
 
     for f in sourceFonts:
         f.close()
@@ -1956,6 +2283,7 @@ def build_hdmx(font):
 def fix_isFixedPitch(font):
     post = font["post"].__dict__
     post["isFixedPitch"] = 1
+
 
 if __name__ == "__main__":
     __dir__ = os.path.dirname(os.path.abspath(__file__))

@@ -10,9 +10,9 @@ fonts`合并入`Sarasa Term SC`, 再经过一些后处理，而最后形成的�
 
 上游版本：
 
-- Sarasa Term SC：0.40.4
-- Nerd Font: 2.3.3
-- Font Patcher: 3.6.1
+- Sarasa Term SC：1.0.22
+- Nerd Font: 3.2.1
+- Font Patcher: 4.14.5
 
 ## 字体效果
 
@@ -35,8 +35,6 @@ fonts`合并入`Sarasa Term SC`, 再经过一些后处理，而最后形成的�
   [`Powerline`](https://github.com/powerline/powerline) 等等。
 - 一些符号进行了纵向拉伸，不会出现`Powerline`条带中高低不一，无法上下对齐的情况。
 - 原始`Sarasa Term SC`字体和`Sarasa Term SC Nerd`字体可以共存，不会产生冲突。
-- 将 `OS/2` 表中的 `xAvgCharWidth` 属性进行了设置，避免了在 windows 系统下，一些
-  不支持新版本 `OS/2` 表的软件中字距不正常的问题。
 - 加入了`hdmx`表，解决了 windows 系统下的一些情况下无法严格对齐的问题。
 - 修正了`OS/2`表中的`panose`和`post`表中的`isFixedPitch`，使得字体被系统认出是等
   宽字体。
@@ -45,7 +43,7 @@ fonts`合并入`Sarasa Term SC`, 再经过一些后处理，而最后形成的�
 
 - MacOS 用户可以直接通过 cask 安装：
   ```sh
-  brew tap laishulu/cask-fonts
+  brew tap laishulu/homebrew
   brew install --cask font-sarasa-nerd
   ```
 - 手工下载安装：
@@ -71,7 +69,6 @@ fonts`合并入`Sarasa Term SC`, 再经过一些后处理，而最后形成的�
    brew install fontforge
    rm Pipfile*
    pipenv --site-packages --python=/Applications/FontForge.app/Contents/Frameworks/Python.framework/Versions/Current/bin/python3
-   pipenv install argparse fonttools
    ```
 5. 建立 `sarasa` 目录，并将原始`Sarasa Term SC`字体文件放入该目录中。
 6. 运行脚本 `./build`，在 `sarasa-nerd`目录下将生成`.ttf`字体文件。同时，所有的
