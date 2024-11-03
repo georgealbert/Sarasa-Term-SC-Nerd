@@ -34,8 +34,7 @@ sha256=$(download_and_hash "SarasaTermSCNerd.ttc.tar.gz")
 # Update the Homebrew formula with actual SHA256 hashes and version
 sed -i.bak \
     -e "s/version \".*\"/version \"$VERSION\"/" \
-    -e "/url.*macism-arm64/{ n; s/sha256 \"[-_ a-zA-Z0-9]*\"/sha256 \"$arm64_sha256\"/; }" \
-    -e "/url.*macism-x86_64/{ n; s/sha256 \"[-_ a-zA-Z0-9]*\"/sha256 \"$x86_64_sha256\"/; }" \
+    -e "/url.*SarasaTermSCNerd\.ttc\.tar\.gz/{ n; s/sha256 \".*\"/sha256 \"$sha256\"/; }" \
     homebrew/Casks/font-sarasa-nerd.rb
 
 # Remove the backup file created by sed
