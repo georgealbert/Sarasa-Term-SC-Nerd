@@ -795,9 +795,10 @@ class font_patcher:
         subFamily = self.get_subfamily()
         font.fullname = f"{looseName} {en_subfamily(subFamily)}"
         font.fontname = f"{compactName}-{subFamily}"
+        uniqueID = f"{font.fullname}; Sarasa v{self.sourceFont.version}; Nerd v{version}"
 
-        font.appendSFNTName(str("English (US)"), str("UniqueID"), font.fullname)
-        font.appendSFNTName(str("Chinese (PRC)"), str("UniqueID"), zh_family(font.fullname))
+        font.appendSFNTName(str("English (US)"), str("UniqueID"), uniqueID)
+        font.appendSFNTName(str("Chinese (PRC)"), str("UniqueID"), uniqueID)
         font.appendSFNTName(str('English (US)'), str('Fullname'), font.fullname)
         font.appendSFNTName(str("Chinese (PRC)"), str("Fullname"), zh_family(font.fullname))
 
@@ -2237,8 +2238,8 @@ def main():
         f.close()
 
 def zh_family(name):
-    res = name.replace(looseName, "更纱黑体-书呆终端-简")
-    res = res.replace(compactName, "更纱黑体-书呆终端-简")
+    res = name.replace(looseName, "更纱终端书呆黑体-简")
+    res = res.replace(compactName, "更纱终端书呆黑体-简")
     return res
 
 def en_subfamily(compact):

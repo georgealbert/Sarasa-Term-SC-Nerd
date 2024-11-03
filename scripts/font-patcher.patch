@@ -1,5 +1,5 @@
 diff --git a/font-patcher b/font-patcher
-index 7c57aeb..bfbe470 100755
+index 7c57aeb..1f976b6 100755
 --- a/font-patcher
 +++ b/font-patcher
 @@ -13,6 +13,14 @@ projectName = "Nerd Fonts"
@@ -111,7 +111,7 @@ index 7c57aeb..bfbe470 100755
          )
  
          familyname = replace_font_name(familyname, reservedFontNameReplacements)
-@@ -752,6 +790,27 @@ class font_patcher:
+@@ -752,6 +790,28 @@ class font_patcher:
                  n.inject_suffix(verboseAdditionalFontNameSuffix, ps_suffix, short_family)
              n.rename_font(font)
  
@@ -120,9 +120,10 @@ index 7c57aeb..bfbe470 100755
 +        subFamily = self.get_subfamily()
 +        font.fullname = f"{looseName} {en_subfamily(subFamily)}"
 +        font.fontname = f"{compactName}-{subFamily}"
++        uniqueID = f"{font.fullname}; Sarasa v{self.sourceFont.version}; Nerd v{version}"
 +
-+        font.appendSFNTName(str("English (US)"), str("UniqueID"), font.fullname)
-+        font.appendSFNTName(str("Chinese (PRC)"), str("UniqueID"), zh_family(font.fullname))
++        font.appendSFNTName(str("English (US)"), str("UniqueID"), uniqueID)
++        font.appendSFNTName(str("Chinese (PRC)"), str("UniqueID"), uniqueID)
 +        font.appendSFNTName(str('English (US)'), str('Fullname'), font.fullname)
 +        font.appendSFNTName(str("Chinese (PRC)"), str("Fullname"), zh_family(font.fullname))
 +
@@ -139,7 +140,7 @@ index 7c57aeb..bfbe470 100755
          font.comment = projectInfo
          font.fontlog = projectInfo
  
-@@ -765,6 +824,10 @@ class font_patcher:
+@@ -765,6 +825,10 @@ class font_patcher:
              self.sourceFont.version = str(self.sourceFont.cidversion) + ";" + projectName + " " + version
          self.sourceFont.sfntRevision = None # Auto-set (refreshed) by fontforge
          self.sourceFont.appendSFNTName(str('English (US)'), str('Version'), "Version " + self.sourceFont.version)
@@ -150,7 +151,7 @@ index 7c57aeb..bfbe470 100755
          # The Version SFNT name is later reused by the NameParser for UniqueID
          # print("Version now is {}".format(sourceFont.version))
  
-@@ -830,6 +893,8 @@ class font_patcher:
+@@ -830,6 +894,8 @@ class font_patcher:
                  sys.exit(1)
          if width_mono:
              force_panose_monospaced(self.sourceFont)
@@ -159,7 +160,7 @@ index 7c57aeb..bfbe470 100755
  
  
      def setup_patch_set(self):
-@@ -1214,9 +1279,12 @@ class font_patcher:
+@@ -1214,9 +1280,12 @@ class font_patcher:
              logger.info("Manually selected metrics: %s (%d)", self.args.metrics, our_btb)
  
          # print("FINI hhea {} typo {} win {} use {}     {}      {}".format(hhea_btb, typo_btb, win_btb, use_typo, our_btb != hhea_btb, self.sourceFont.fontname))
@@ -173,7 +174,7 @@ index 7c57aeb..bfbe470 100755
          if metrics == Metric.HHEA:
              self.font_dim['ymin'] = self.sourceFont.hhea_descent - half_gap(self.sourceFont.hhea_linegap, False)
              self.font_dim['ymax'] = self.sourceFont.hhea_ascent + half_gap(self.sourceFont.hhea_linegap, True)
-@@ -1336,6 +1404,10 @@ class font_patcher:
+@@ -1336,6 +1405,10 @@ class font_patcher:
              return (1.0, 1.0)
  
          target_width = self.font_dim['width'] * self.get_target_width(stretch)
@@ -184,7 +185,7 @@ index 7c57aeb..bfbe470 100755
          scale_ratio_x = target_width / sym_dim['width']
  
          # font_dim['height'] represents total line height, keep our symbols sized based upon font's em
-@@ -1736,6 +1808,11 @@ class font_patcher:
+@@ -1736,6 +1809,11 @@ class font_patcher:
                      return (scale, box)
          return None
  
@@ -196,7 +197,7 @@ index 7c57aeb..bfbe470 100755
  
  def half_gap(gap, top):
      """ Divides integer value into two new integers """
-@@ -2014,6 +2091,10 @@ def setup_arguments():
+@@ -2014,6 +2092,10 @@ def setup_arguments():
          args.powerline = True
          args.powerlineextra = True
          args.material = True
@@ -207,13 +208,13 @@ index 7c57aeb..bfbe470 100755
          args.weather = True
  
      if not args.complete:
-@@ -2155,6 +2236,71 @@ def main():
+@@ -2155,6 +2237,71 @@ def main():
      for f in sourceFonts:
          f.close()
  
 +def zh_family(name):
-+    res = name.replace(looseName, "更纱黑体-书呆终端-简")
-+    res = res.replace(compactName, "更纱黑体-书呆终端-简")
++    res = name.replace(looseName, "更纱终端书呆黑体-简")
++    res = res.replace(compactName, "更纱终端书呆黑体-简")
 +    return res
 +
 +def en_subfamily(compact):
