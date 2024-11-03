@@ -1,5 +1,5 @@
 diff --git a/font-patcher b/font-patcher
-index 7c57aeb..5b98549 100755
+index 7c57aeb..bfbe470 100755
 --- a/font-patcher
 +++ b/font-patcher
 @@ -13,6 +13,14 @@ projectName = "Nerd Fonts"
@@ -118,23 +118,23 @@ index 7c57aeb..5b98549 100755
 +        # FOR SARASA
 +        font.familyname = looseName
 +        subFamily = self.get_subfamily()
-+        font.fullname = f"{looseName} {subFamily}"
++        font.fullname = f"{looseName} {en_subfamily(subFamily)}"
 +        font.fontname = f"{compactName}-{subFamily}"
 +
 +        font.appendSFNTName(str("English (US)"), str("UniqueID"), font.fullname)
-+        font.appendSFNTName(str("Chinese (PRC)"), str("UniqueID"), chn(font.fullname))
++        font.appendSFNTName(str("Chinese (PRC)"), str("UniqueID"), zh_family(font.fullname))
 +        font.appendSFNTName(str('English (US)'), str('Fullname'), font.fullname)
-+        font.appendSFNTName(str("Chinese (PRC)"), str("Fullname"), chn(font.fullname))
++        font.appendSFNTName(str("Chinese (PRC)"), str("Fullname"), zh_family(font.fullname))
 +
 +        font.appendSFNTName(str('English (US)'), str('Family'), font.familyname)
-+        font.appendSFNTName(str('Chinese (PRC)'), str('Family'), chn(font.familyname))
-+        font.appendSFNTName(str('English (US)'), str('SubFamily'), subFamily)
-+        font.appendSFNTName(str('Chinese (PRC)'), str('SubFamily'), subFamily)
++        font.appendSFNTName(str('Chinese (PRC)'), str('Family'), zh_family(font.familyname))
++        font.appendSFNTName(str('English (US)'), str('SubFamily'), en_subfamily(subFamily))
++        font.appendSFNTName(str('Chinese (PRC)'), str('SubFamily'), zh_subfamily(subFamily))
 +
 +        font.appendSFNTName(str('English (US)'), str('Preferred Family'), font.familyname)
-+        font.appendSFNTName(str('Chinese (PRC)'), str('Preferred Family'), chn(font.familyname))
-+        font.appendSFNTName(str('English (US)'), str('Preferred Styles'), subFamily)
-+        font.appendSFNTName(str('Chinese (PRC)'), str('Preferred Styles'), subFamily)
++        font.appendSFNTName(str('Chinese (PRC)'), str('Preferred Family'), zh_family(font.familyname))
++        font.appendSFNTName(str('English (US)'), str('Preferred Styles'), en_subfamily(subFamily))
++        font.appendSFNTName(str('Chinese (PRC)'), str('Preferred Styles'), zh_subfamily(subFamily))
 +
          font.comment = projectInfo
          font.fontlog = projectInfo
@@ -190,7 +190,7 @@ index 7c57aeb..5b98549 100755
  
 +    # FOR SARASA: extract subFamily from font name
 +    def get_subfamily(self):
-+        file_name = self.args.font.split('.')[0]
++        file_name = self.args.font.split('.')[-2]
 +        return file_name.split('-')[-1]
 +
  
@@ -207,14 +207,32 @@ index 7c57aeb..5b98549 100755
          args.weather = True
  
      if not args.complete:
-@@ -2155,6 +2236,53 @@ def main():
+@@ -2155,6 +2236,71 @@ def main():
      for f in sourceFonts:
          f.close()
  
-+def chn(name):
++def zh_family(name):
 +    res = name.replace(looseName, "更纱黑体-书呆终端-简")
 +    res = res.replace(compactName, "更纱黑体-书呆终端-简")
 +    return res
++
++def en_subfamily(compact):
++    return compact.replace("Italic", " Italic").strip()
++
++def zh_subfamily(compact):
++    sub_family_dict = {
++        "ExtraLight": "特细体",
++        "ExtraLightItalic":"特细斜体",
++        "Light":"细体",
++        "LightItalic":"细斜体",
++        "Regular":"常规体",
++        "Italic":"斜体",
++        "SemiBold":"中粗体",
++        "SemiBoldItalic":"中粗斜体",
++        "Bold":"粗体",
++        "BoldItalic":"粗斜体"
++    }
++    return sub_family_dict[compact]
 +
 +# FOR SARASA: build hdmx table
 +import sys
