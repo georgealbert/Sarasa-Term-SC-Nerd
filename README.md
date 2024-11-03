@@ -54,7 +54,7 @@ fonts`合并入`Sarasa Term SC`, 再经过一些后处理，而最后形成的�
 
 在你的主题配置文件中，使用 `Sarasa Term SC Nerd`。
 
-## 如何生成字体
+## 自己生成字体
 
 ```sh
 # Install deps
@@ -81,7 +81,6 @@ bash -xeu scripts/build
 
 ```sh
 brew install fontforge
-rm Pipfile*
 pipenv --site-packages --python=/Applications/FontForge.app/Contents/Frameworks/Python.framework/Versions/Current/bin/python3
 
 ```
