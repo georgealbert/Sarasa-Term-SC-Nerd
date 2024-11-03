@@ -44,7 +44,7 @@ fonts`合并入`Sarasa Term SC`, 再经过一些后处理，而最后形成的�
 - MacOS 用户可以直接通过 cask 安装：
   ```sh
   brew tap laishulu/homebrew
-  brew install --cask font-sarasa-nerd
+  brew install font-sarasa-nerd
   ```
 - 手工下载安装：
   - 前往 [release](https://github.com/laishulu/Sarasa-Term-SC-Nerd/releases) 下载

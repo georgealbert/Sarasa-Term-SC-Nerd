@@ -1,5 +1,5 @@
 diff --git a/font-patcher b/font-patcher
-index 7c57aeb..1f976b6 100755
+index 7c57aeb..96cd6e4 100755
 --- a/font-patcher
 +++ b/font-patcher
 @@ -13,6 +13,14 @@ projectName = "Nerd Fonts"
@@ -120,7 +120,7 @@ index 7c57aeb..1f976b6 100755
 +        subFamily = self.get_subfamily()
 +        font.fullname = f"{looseName} {en_subfamily(subFamily)}"
 +        font.fontname = f"{compactName}-{subFamily}"
-+        uniqueID = f"{font.fullname}; Sarasa v{self.sourceFont.version}; Nerd v{version}"
++        uniqueID = f"{font.fullname}; Sarasa v{self.sourceFont.version}"
 +
 +        font.appendSFNTName(str("English (US)"), str("UniqueID"), uniqueID)
 +        font.appendSFNTName(str("Chinese (PRC)"), str("UniqueID"), uniqueID)

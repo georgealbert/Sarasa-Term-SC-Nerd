@@ -795,7 +795,7 @@ class font_patcher:
         subFamily = self.get_subfamily()
         font.fullname = f"{looseName} {en_subfamily(subFamily)}"
         font.fontname = f"{compactName}-{subFamily}"
-        uniqueID = f"{font.fullname}; Sarasa v{self.sourceFont.version}; Nerd v{version}"
+        uniqueID = f"{font.fullname}; Sarasa v{self.sourceFont.version}"
 
         font.appendSFNTName(str("English (US)"), str("UniqueID"), uniqueID)
         font.appendSFNTName(str("Chinese (PRC)"), str("UniqueID"), uniqueID)
