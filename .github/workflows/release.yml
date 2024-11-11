@@ -77,15 +77,14 @@ jobs:
       - name: Build Nerd Font
         run: bash -xeu scripts/build
 
-      - name: Display structure of the directory
-        run: ls -R
-
       - name: Rename file
         run: |
-          mv sarasa-nerd/SarasaTermSCNerd.ttf.tar.gz sarasa-nerd/SarasaTermSCNerd-Unhinted.ttf.tar.gz
-          mv sarasa-nerd/SarasaTermSCNerd.ttc.tar.gz sarasa-nerd/SarasaTermSCNerd-Unhinted.ttc.tar.gz
-          mv sarasa-nerd/SarasaTermSCNerd.ttf.7z sarasa-nerd/SarasaTermSCNerd-Unhinted.ttf.7z
-          mv sarasa-nerd/SarasaTermSCNerd.ttc.7z sarasa-nerd/SarasaTermSCNerd-Unhinted.ttc.7z
+          cd sarasa-nerd
+          mv SarasaTermSCNerd.ttf.tar.gz SarasaTermSCNerd-Unhinted.ttf.tar.gz
+          mv SarasaTermSCNerd.ttc.tar.gz SarasaTermSCNerd-Unhinted.ttc.tar.gz
+          mv SarasaTermSCNerd.ttf.7z SarasaTermSCNerd-Unhinted.ttf.7z
+          mv SarasaTermSCNerd.ttc.7z SarasaTermSCNerd-Unhinted.ttc.7z
+          cd ..
 
       - name: Upload Release Asset
         uses: softprops/action-gh-release@v2
