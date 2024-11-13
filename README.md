@@ -35,6 +35,8 @@ fonts`合并入`Sarasa Term SC`, 再经过一些后处理，而最后形成的�
   [`Powerline`](https://github.com/powerline/powerline) 等等。
 - 一些符号进行了纵向拉伸，不会出现`Powerline`条带中高低不一，无法上下对齐的情况。
 - 原始`Sarasa Term SC`字体和`Sarasa Term SC Nerd`字体可以共存，不会产生冲突。
+- 将 `OS/2` 表中的 `xAvgCharWidth` 属性进行了设置，避免了在 windows 系统下，一些
+  不支持新版本 `OS/2` 表的软件中字距不正常的问题。
 - 加入了`hdmx`表，解决了 windows 系统下的一些情况下无法严格对齐的问题。
 - 修正了`OS/2`表中的`panose`和`post`表中的`isFixedPitch`，使得字体被系统认出是等
   宽字体。

@@ -511,7 +511,7 @@ class font_patcher:
 
         # FOR SARASA: build hdmx table
         print("Building hdmx table and fix post table")
-        post_fix(outfile)
+        post_fix(self.args.font, outfile)
 
         if self.args.postprocess:
             subprocess.call([self.args.postprocess, outfile])
@@ -2265,12 +2265,17 @@ import sys
 import math
 from fontTools.ttLib import TTFont, newTable
 
-def post_fix(filename):
-    font = TTFont(filename, recalcBBoxes=False)
-    build_hdmx(font)
-    fix_isFixedPitch(font)
-    font.save(filename)
-    font.close()
+def post_fix(src_file, dst_file):
+    dst_font = TTFont(dst_file, recalcBBoxes=False)
+    build_hdmx(dst_font)
+    fix_isFixedPitch(dst_font)
+
+    src_font = TTFont(src_file)
+    dst_font["OS/2"].xAvgCharWidth = src_font["OS/2"].xAvgCharWidth
+    src_font.close()
+
+    dst_font.save(dst_file)
+    dst_font.close()
 
 def build_hdmx(font):
     headFlagInstructionsMayAlterAdvanceWidth = 0x0010
