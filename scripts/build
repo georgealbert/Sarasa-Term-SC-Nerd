@@ -11,7 +11,7 @@ for item in ../"$sarasa_dir"/*; do
     extension="${item##*.}"
     if [ "$extension" == "ttf" ]; then
       echo "processing " "$item"
-      ../font-patcher -q -l -c --careful "$item"
+      ../font-patcher --quiet --adjust-line-height --complete --careful "$item"
     fi
   fi
 done
