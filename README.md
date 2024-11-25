@@ -40,6 +40,8 @@ fonts`合并入`Sarasa Term SC`, 再经过一些后处理，而最后形成的�
 - 加入了`hdmx`表，解决了 windows 系统下的一些情况下无法严格对齐的问题。
 - 修正了`OS/2`表中的`panose`和`post`表中的`isFixedPitch`，使得字体被系统认出是等
   宽字体。
+- 在庞大的 `material design` 图标库中，只选择一部分图标，以避免`65534`的字符数硬
+  顶。
 
 ## 安装
 
@@ -89,3 +91,9 @@ brew install fontforge
 pipenv --site-packages --python=/Applications/FontForge.app/Contents/Frameworks/Python.framework/Versions/Current/bin/python3
 
 ```
+
+在合并`material design`图标时需要注意：
+- 虽然实际上`65535`是硬顶，但是`65535`在字体处理的很多地方被作为魔法数，所以用
+  `65534`作为硬顶。
+- 同一个字体，不同字体样式的图标数不同，斜体比常规体要多。为了避免硬顶，应当根据
+  斜体图标的数量来计算。
