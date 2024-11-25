@@ -1,5 +1,5 @@
 diff --git a/font-patcher b/font-patcher
-index 51e3ff1..e580b70 100755
+index 51e3ff1..cbefd23 100755
 --- a/font-patcher
 +++ b/font-patcher
 @@ -13,6 +13,14 @@ projectName = "Nerd Fonts"
@@ -175,19 +175,23 @@ index 51e3ff1..e580b70 100755
      def setup_patch_set(self):
          """ Creates list of dicts to with instructions on copying glyphs from each symbol font into self.sourceFont """
  
-@@ -1139,7 +1209,10 @@ class font_patcher:
+@@ -1139,7 +1209,14 @@ class font_patcher:
              {'Enabled': self.args.powersymbols,         'Name': "Power Symbols",           'Filename': "Unicode_IEC_symbol_font.otf",                    'Exact': True,  'SymStart': 0x23FB, 'SymEnd': 0x23FE, 'SrcStart': None,   'ScaleRules': None,             'Attributes': SYM_ATTR_DEFAULT},  # Power, Power On/Off, Power On, Sleep
              {'Enabled': self.args.powersymbols,         'Name': "Power Symbols",           'Filename': "Unicode_IEC_symbol_font.otf",                    'Exact': True,  'SymStart': 0x2B58, 'SymEnd': 0x2B58, 'SrcStart': None,   'ScaleRules': None,             'Attributes': SYM_ATTR_DEFAULT},  # Heavy Circle (aka Power Off)
              {'Enabled': False             ,             'Name': "Material legacy",         'Filename': "materialdesign/materialdesignicons-webfont.ttf", 'Exact': False, 'SymStart': 0xF001, 'SymEnd': 0xF847, 'SrcStart': 0xF500, 'ScaleRules': None,             'Attributes': SYM_ATTR_DEFAULT},
 -            {'Enabled': self.args.material,             'Name': "Material",                'Filename': "materialdesign/MaterialDesignIconsDesktop.ttf",  'Exact': True,  'SymStart': 0xF0001,'SymEnd': 0xF1AF0,'SrcStart': None,   'ScaleRules': MDI_SCALE_LIST,   'Attributes': SYM_ATTR_DEFAULT},
 +            # FOR SARASA
 +            # {'Enabled': self.args.material,             'Name': "Material",                'Filename': "materialdesign/MaterialDesignIconsDesktop.ttf",  'Exact': True,  'SymStart': 0xF0001,'SymEnd': 0xF1AF0,'SrcStart': None,   'ScaleRules': MDI_SCALE_LIST,   'Attributes': SYM_ATTR_DEFAULT},
-+            {'Enabled': self.args.material,             'Name': "Material",                'Filename': "materialdesign/MaterialDesignIconsDesktop.ttf",  'Exact': True,  'SymStart': 0xF0001,'SymEnd': 0xF165C,'SrcStart': None,   'ScaleRules': MDI_SCALE_LIST,   'Attributes': SYM_ATTR_DEFAULT},
++            # {'Enabled': self.args.material,             'Name': "Material",                'Filename': "materialdesign/MaterialDesignIconsDesktop.ttf",  'Exact': True,  'SymStart': 0xF0001,'SymEnd': 0xF165C,'SrcStart': None,   'ScaleRules': MDI_SCALE_LIST,   'Attributes': SYM_ATTR_DEFAULT},
++            {'Enabled': self.args.material,             'Name': "Material",                'Filename': "materialdesign/MaterialDesignIconsDesktop.ttf",  'Exact': True,  'SymStart': 0xF0001,'SymEnd': 0xF0553,'SrcStart': None,   'ScaleRules': MDI_SCALE_LIST,   'Attributes': SYM_ATTR_DEFAULT},
++            {'Enabled': self.args.material,             'Name': "Material",                'Filename': "materialdesign/MaterialDesignIconsDesktop.ttf",  'Exact': True,  'SymStart': 0xF0565,'SymEnd': 0xF118E,'SrcStart': None,   'ScaleRules': MDI_SCALE_LIST,   'Attributes': SYM_ATTR_DEFAULT},
++            {'Enabled': self.args.material,             'Name': "Material",                'Filename': "materialdesign/MaterialDesignIconsDesktop.ttf",  'Exact': True,  'SymStart': 0xF119E,'SymEnd': 0xF165C,'SrcStart': None,   'ScaleRules': MDI_SCALE_LIST,   'Attributes': SYM_ATTR_DEFAULT},
++            {'Enabled': self.args.material,             'Name': "Material",                'Filename': "materialdesign/MaterialDesignIconsDesktop.ttf",  'Exact': True,  'SymStart': 0xF19E8,'SymEnd': 0xF19FD,'SrcStart': None,   'ScaleRules': MDI_SCALE_LIST,   'Attributes': SYM_ATTR_DEFAULT},
 +
              {'Enabled': self.args.weather,              'Name': "Weather Icons",           'Filename': "weather-icons/weathericons-regular-webfont.ttf", 'Exact': False, 'SymStart': 0xF000, 'SymEnd': 0xF0EB, 'SrcStart': 0xE300, 'ScaleRules': WEATH_SCALE_LIST, 'Attributes': SYM_ATTR_DEFAULT},
              {'Enabled': self.args.fontlogos,            'Name': "Font Logos",              'Filename': "font-logos.ttf",                                 'Exact': True,  'SymStart': 0xF300, 'SymEnd': 0xF381, 'SrcStart': None,   'ScaleRules': None,             'Attributes': SYM_ATTR_DEFAULT},
              {'Enabled': self.args.octicons,             'Name': "Octicons",                'Filename': "octicons/octicons.ttf",                          'Exact': False, 'SymStart': 0xF000, 'SymEnd': 0xF105, 'SrcStart': 0xF400, 'ScaleRules': OCTI_SCALE_LIST,  'Attributes': SYM_ATTR_DEFAULT},  # Magnifying glass
-@@ -1253,6 +1326,10 @@ class font_patcher:
+@@ -1253,6 +1330,10 @@ class font_patcher:
  
          self.font_dim = {'xmin': 0, 'ymin': 0, 'xmax': 0, 'ymax': 0, 'width' : 0, 'height': 0, 'iconheight': 0, 'ypadding': 0}
  
@@ -198,7 +202,7 @@ index 51e3ff1..e580b70 100755
          if metrics == Metric.HHEA:
              self.font_dim['ymin'] = self.sourceFont.hhea_descent - half_gap(self.sourceFont.hhea_linegap, False)
              self.font_dim['ymax'] = self.sourceFont.hhea_ascent + half_gap(self.sourceFont.hhea_linegap, True)
-@@ -1361,9 +1438,13 @@ class font_patcher:
+@@ -1361,9 +1442,13 @@ class font_patcher:
          """ Get the target width (1 or 2 'cell') for a given stretch parameter """
          # For monospaced fonts all chars need to be maximum 'one' space wide
          # other fonts allows double width glyphs for 'pa' or if requested with '2'
@@ -215,7 +219,7 @@ index 51e3ff1..e580b70 100755
  
      def get_scale_factors(self, sym_dim, stretch, overlap=None):
          """ Get scale in x and y as tuple """
-@@ -1791,6 +1872,10 @@ class font_patcher:
+@@ -1791,6 +1876,10 @@ class font_patcher:
                      return (scale, box)
          return None
  
@@ -226,7 +230,7 @@ index 51e3ff1..e580b70 100755
  
  def half_gap(gap, top):
      """ Divides integer value into two new integers """
-@@ -2210,6 +2295,76 @@ def main():
+@@ -2210,6 +2299,76 @@ def main():
      for f in sourceFonts:
          f.close()
  

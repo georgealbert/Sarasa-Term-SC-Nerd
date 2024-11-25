@@ -40,7 +40,7 @@ fonts`合并入`Sarasa Term SC`, 再经过一些后处理，而最后形成的�
 - 加入了`hdmx`表，解决了 windows 系统下的一些情况下无法严格对齐的问题。
 - 修正了`OS/2`表中的`panose`和`post`表中的`isFixedPitch`，使得字体被系统认出是等
   宽字体。
-- 在庞大的 `material design` 图标库中，只选择一部分图标，以避免`65534`的字符数硬
+- 在庞大的 `material design` 图标库中，只跳跃选择一部分图标，以避免`65534`的字符数硬
   顶。
 
 ## 安装
