@@ -10,9 +10,10 @@ fonts`合并入`Sarasa Term SC`, 再经过一些后处理，而最后形成的�
 
 上游版本：
 
-- Sarasa Term SC：1.0.24
+- Sarasa Term SC：1.0.24，合并我定制的Iosevka Regular字体，生成unhintted ttf字体，生成auto hintted ttf太慢了，根本跑不出来。
 - Nerd Font: 3.3.0
 - Font Patcher: 4.16.1
+- Iosevka: SS12的基础上参考`FantasqueSansMono`的风格，修改了大部份英文小写字母
 
 ## 字体效果
 
@@ -78,7 +79,7 @@ wget -q https://github.com/ryanoasis/nerd-fonts/raw/refs/heads/master/FontPatche
 unzip FontPatcher.zip
 
 # Copy Scripts
-cp scripts/font-patcher font-patcher && cp scripts/otf2otc.py otf2otc.py
+cp -p scripts/font-patcher font-patcher && cp scripts/otf2otc.py otf2otc.py
 
 # name: Build Nerd
 bash -xeu scripts/build
