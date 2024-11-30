@@ -1,8 +1,9 @@
-#!/usr/bin/env /Applications/FontForge.app/Contents/Frameworks/Python.framework/Versions/3.10/bin/python3.10
+#!/usr/bin/env python
 # coding=utf8
 # Nerd Fonts Version: 3.3.0
 # Script version is further down
 
+# /Applications/FontForge.app/Contents/Frameworks/Python.framework/Versions/3.10/bin/python3.10
 from __future__ import absolute_import, print_function, unicode_literals
 
 # Change the script version when you edit this script:
