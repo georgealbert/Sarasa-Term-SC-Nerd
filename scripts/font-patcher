@@ -8,7 +8,7 @@ from __future__ import absolute_import, print_function, unicode_literals
 # Change the script version when you edit this script:
 script_version = "4.16.1"
 
-version = "3.3.0"
+version = "3.3.1"
 projectName = "Nerd Fonts"
 projectNameAbbreviation = "NF"
 projectNameSingular = projectName[:-1]
@@ -18,8 +18,8 @@ projectName = "Nerds"
 projectNameAbbreviation = ""
 projectNameSingular = projectName[:-1]
 subFamily = ""
-looseName = "Sarasa Term SC Nerd"
-compactName = "SarasaTermSCNerd"
+looseName = "Sarasa Term Albert SC Nerd"
+compactName = "SarasaTermAlbertSCNerd"
 
 import sys
 import re
@@ -2300,8 +2300,8 @@ def main():
         f.close()
 
 def zh_family(name):
-    res = name.replace(looseName, "更纱终端书呆黑体-简")
-    res = res.replace(compactName, "更纱终端书呆黑体-简")
+    res = name.replace(looseName, "Sarasa Term Albert SC Nerd")
+    res = res.replace(compactName, "SarasaTermAlbertSCNerd")
     return res
 
 def en_subfamily(compact):
